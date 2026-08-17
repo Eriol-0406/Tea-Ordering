@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Luxe Drinks - Place and track your premium bubble tea and coffee orders in real-time.">
+  <title>Luxe Drinks - Premium Ordering</title>
+  
+  <!-- Leaflet CSS for maps -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+  <!-- Stylesheets -->
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+
+  <!-- App Header -->
+  <header class="app-header">
+    <div class="container header-container">
+      <div class="logo-wrapper" onclick="resetToMenu()" style="cursor: pointer;">
+        <span class="logo-icon">🍵</span>
+        <h1>LUXE DRINKS</h1>
+      </div>
+      
+      <!-- Cart trigger button -->
+      <div class="cart-trigger" id="cartTrigger" onclick="switchTab('cart')">
+        <span>🛒</span>
+        <span class="cart-label">Cart</span>
+        <span class="cart-badge" id="cartBadge">0</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Workspace -->
+  <main class="container" id="menuView">
+    <!-- Category Tabs & Search -->
+    <div class="nav-and-search">
+      <div class="category-tabs" id="categoryTabs">
+        <button class="category-tab active" onclick="filterCategory('All')">All</button>
+        <button class="category-tab" onclick="filterCategory('Milk Tea')">Milk Tea</button>
+        <button class="category-tab" onclick="filterCategory('Fruit Tea')">Fruit Tea</button>
+        <button class="category-tab" onclick="filterCategory('Pure Tea')">Pure Tea</button>
+        <button class="category-tab" onclick="filterCategory('Cold Brew')">Cold Brew</button>
+        <button class="category-tab" onclick="filterCategory('Coffee')">Coffee</button>
+        <button class="category-tab" onclick="filterCategory('Non-Coffee')">Non-Coffee</button>
+        <button class="category-tab" onclick="filterCategory('Matcha')">Matcha</button>
+      </div>
+      
+      <div class="search-box">
+        <span class="search-icon">🔍</span>
+        <input type="text" class="input-field" id="searchInput" placeholder="Search drinks..." oninput="handleSearch()">
+      </div>
+    </div>
+
+    <!-- Menu Grid -->
+    <div class="menu-grid" id="menuGrid">
+      <div style="grid-column: 1/-1; text-align: center; color: var(--text-secondary); padding: 3rem;">
+        Loading our premium beverages...
+      </div>
+    </div>
+  </main>
+
+  <!-- Order Tracking View (Initially Hidden) -->
+  <main class="container" id="trackingView" style="display: none; margin-bottom: 6rem;">
+    <div class="tracking-wrapper glass-panel" id="trackingContent">
+      <div class="tracking-header-status">
+        <div class="tracking-id-tag" id="trackOrderId">ORD-XXXXXX</div>
+        <h2 style="font-size: 1.6rem; margin-bottom: 0.5rem;" id="trackStatusHeading">Order Placed</h2>
+        <p style="color: var(--text-secondary); font-size: 0.85rem;" id="trackStatusDesc">We have received your order and are preparing details.</p>
+      </div>
+
+      <!-- Real-time progress timeline -->
+      <div class="status-timeline">
+        <div class="timeline-progress-bar" id="timelineProgressBar"></div>
+        
+        <div class="timeline-node" id="node-pending">
+          <div class="timeline-icon-box">📝</div>
+          <div class="timeline-label">Placed</div>
+        </div>
+        
+        <div class="timeline-node" id="node-preparing">
+          <div class="timeline-icon-box">🍳</div>
+          <div class="timeline-label">Preparing</div>
+        </div>
+        
+        <div class="timeline-node" id="node-ready">
+          <div class="timeline-icon-box">🛍️</div>
+          <div class="timeline-label">Ready</div>
+        </div>
+        
+        <div class="timeline-node" id="node-completed">
+          <div class="timeline-icon-box">✨</div>
+          <div class="timeline-label">Collected</div>
+        </div>
+      </div>
+
+      <!-- Live Location Map -->
+      <h3 style="font-size: 1rem; margin-top: 1.5rem; margin-bottom: 0.25rem;">Live Order Radar</h3>
+      <p style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.5rem;">
+        Showing shop location relative to your verified coordinate.
+      </p>
+      <div class="map-frame-container">
+        <div id="customerMap"></div>
+      </div>
+
+      <!-- Order Receipt Summary -->
+      <div class="receipt-card" style="margin-top: 1.5rem;">
+        <h3 style="font-size: 1rem; margin-bottom: 0.75rem; border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 0.4rem;">
+          Receipt Details
+        </h3>
+        <div id="trackReceiptItems">
+          <!-- Dynamic receipt items -->
+        </div>
+        <div class="receipt-row" style="margin-top: 0.75rem; font-weight: 700; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 0.75rem; font-size: 0.85rem;">
+          <span>Payment Option</span>
+          <span id="trackReceiptPayment" style="color: var(--accent-color);">Pay at Counter</span>
+        </div>
+        <div class="receipt-row" style="border: none; font-size: 0.85rem;">
+          <span>Payment Status</span>
+          <span id="trackReceiptPaymentStatus" style="color: var(--warning);">Pending</span>
+        </div>
+        <div class="receipt-row" style="border: none; margin-top: 0.25rem;">
+          <span class="receipt-total" style="font-size: 1.1rem;">Total Price</span>
+          <span class="receipt-total" id="trackReceiptTotal" style="font-size: 1.1rem;">RM 0.00</span>
+        </div>
+
+        <div class="barcode-mock"></div>
+        <p style="text-align: center; font-size: 0.7rem; color: var(--text-muted); margin-top: 0.4rem;">
+          Present this barcode at the counter when collecting/paying.
+        </p>
+      </div>
+
+      <div style="text-align: center; margin-top: 1.5rem;">
+        <button class="btn btn-secondary" onclick="resetToMenu()" style="width: 100%;">Order Something Else</button>
+      </div>
+    </div>
+
+    <!-- No Active Order Placeholder -->
+    <div class="tracking-wrapper glass-panel" id="trackingPlaceholder" style="display: none; text-align: center; padding: 3rem 1.5rem; margin-bottom: 6rem;">
+      <div style="font-size: 4rem; margin-bottom: 1.5rem;">📋</div>
+      <h2 style="font-size: 1.5rem; margin-bottom: 0.5rem; font-family: var(--font-heading);">No Active Orders</h2>
+      <p style="color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 2rem;">
+        You don't have any drink orders currently in preparation. Go order some premium beverages!
+      </p>
+      <button class="btn btn-primary" onclick="switchTab('menu')" style="width: 100%;">Browse Menu</button>
+    </div>
+  </main>
+
+  <!-- Inline Cart View -->
+  <main class="container" id="cartView" style="display: none; margin-bottom: 6rem;">
+    <div class="cart-wrapper glass-panel" style="padding: 1.5rem;">
+      <div class="cart-view-header" style="padding-bottom: 0.75rem; border-bottom: 1px solid rgba(255,255,255,0.06); margin-bottom: 1rem;">
+        <h2 style="font-size: 1.4rem;">Selected Drinks</h2>
+      </div>
+      
+      <div class="cart-items-container" id="cartItems" style="padding: 0; min-height: 200px;">
+        <!-- Dynamic Cart Items -->
+      </div>
+      
+      <div class="cart-view-footer" style="margin-top: 1.5rem; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 1.25rem;">
+        <div class="cart-summary-row" style="display: flex; justify-content: space-between; font-size: 1.1rem; font-weight: 700; margin-bottom: 1rem;">
+          <span>Subtotal</span>
+          <span class="cart-summary-total" id="cartTotal" style="color: var(--accent-color);">RM 0.00</span>
+        </div>
+        <button class="btn btn-primary" style="width: 100%;" id="checkoutBtn" onclick="openCheckoutModal()">
+          Proceed to Checkout
+        </button>
+      </div>
+    </div>
+  </main>
+
+  <!-- Slide-Up Modifiers Bottom Sheet Modal -->
+  <div class="sheet-overlay" id="modifiersModalOverlay">
+    <div class="bottom-sheet">
+      <div class="sheet-header">
+        <div>
+          <h2 class="sheet-title" id="modDrinkTitle">Drink Customizations</h2>
+          <p id="modDrinkDesc" style="font-size:0.75rem; color: var(--text-secondary); margin-top:0.15rem;"></p>
+        </div>
+        <button class="sheet-close" onclick="closeModifiersModal()">✕</button>
+      </div>
+
+      <!-- Size Selection Segment -->
+      <div class="modifier-section" id="modSizeSection">
+        <span class="modifier-label">Select Size / Type</span>
+        <div class="modifier-options-grid" id="modSizeContainer">
+          <!-- Dynamic size buttons -->
+        </div>
+      </div>
+
+      <!-- Tea Base Customization (For Lemon Tea [DaHongPao/White Peach]) -->
+      <div class="modifier-section" id="modTeaBaseSection" style="display: none;">
+        <span class="modifier-label">Tea Base (茶底)</span>
+        <div class="modifier-options-grid">
+          <div class="modifier-pill active" data-base="Da Hong Pao (大红袍)" onclick="selectTeaBase(this)">Da Hong Pao</div>
+          <div class="modifier-pill" data-base="White Peach (白桃乌龙)" onclick="selectTeaBase(this)">White Peach</div>
+        </div>
+      </div>
+
+      <!-- Ice Customization -->
+      <div class="modifier-section" id="modIceSection">
+        <span class="modifier-label">Ice Level</span>
+        <div class="modifier-options-grid">
+          <div class="modifier-pill active" data-ice="Normal Ice" onclick="selectIce(this)">Normal Ice</div>
+          <div class="modifier-pill" data-ice="Less Ice" onclick="selectIce(this)">Less Ice</div>
+          <div class="modifier-pill" data-ice="No Ice" onclick="selectIce(this)">No Ice</div>
+          <div class="modifier-pill" data-ice="More Ice" onclick="selectIce(this)">More Ice</div>
+        </div>
+      </div>
+
+      <!-- Sugar Customization -->
+      <div class="modifier-section" id="modSugarSection">
+        <span class="modifier-label">Sugar Level</span>
+        <div class="modifier-options-grid">
+          <div class="modifier-pill active" data-sugar="Normal Sugar" onclick="selectSugar(this)">Normal</div>
+          <div class="modifier-pill" data-sugar="Less Sugar" onclick="selectSugar(this)">Less (70%)</div>
+          <div class="modifier-pill" data-sugar="Half Sugar" onclick="selectSugar(this)">Half (50%)</div>
+          <div class="modifier-pill" data-sugar="Slight Sugar" onclick="selectSugar(this)">Slight (30%)</div>
+          <div class="modifier-pill" data-sugar="No Sugar" onclick="selectSugar(this)">No Sugar</div>
+        </div>
+      </div>
+
+      <!-- Coffee Extra Espresso Addon -->
+      <div class="modifier-section" id="modCoffeeAddonSection" style="display: none;">
+        <span class="modifier-label">Coffee Extras</span>
+        <div class="addon-row" id="addonExtraEspresso" onclick="toggleAddon('extraEspresso')">
+          <span style="font-size: 0.85rem; font-weight: 500;">☕ Extra Espresso Shot</span>
+          <span style="font-size: 0.85rem; font-weight: 700; color: var(--accent-color);">+ RM 2.50</span>
+        </div>
+      </div>
+
+      <!-- Matcha Upgrade Addon -->
+      <div class="modifier-section" id="modMatchaAddonSection" style="display: none;">
+        <span class="modifier-label">Niko Neko Matcha Grade Upgrade</span>
+        <div class="modifier-options-grid">
+          <div class="modifier-pill active" data-matcha="none" onclick="selectMatchaUpgrade(this)">None</div>
+          <div class="modifier-pill" data-matcha="yuri" onclick="selectMatchaUpgrade(this)">Yuri (+RM 2)</div>
+          <div class="modifier-pill" data-matcha="ajisai" onclick="selectMatchaUpgrade(this)">Ajisai (+RM 3)</div>
+        </div>
+      </div>
+
+      <!-- Add to selection CTA -->
+      <button class="btn btn-primary" style="width: 100%; margin-top: 0.5rem;" id="addToCartConfirmBtn" onclick="confirmAddToCart()">
+        Add to Cart (RM 0.00)
+      </button>
+    </div>
+  </div>
+
+  <!-- Checkout Stepper Modal -->
+  <div class="modal-overlay" id="checkoutModalOverlay">
+    <div class="checkout-modal">
+      <button class="modal-close" onclick="closeCheckoutModal()">✕</button>
+      
+      <h2 style="font-size: 1.4rem; margin-bottom: 1.25rem; text-align: center;">Checkout Proximity Check</h2>
+      
+      <!-- Stepper Nodes -->
+      <div class="checkout-steps">
+        <div class="step-line-progress" id="stepLineProgress"></div>
+        
+        <div class="step-node active" id="stepNode-1">
+          <div class="step-circle">1</div>
+          <span>GPS Check</span>
+        </div>
+        <div class="step-node" id="stepNode-2">
+          <div class="step-circle">2</div>
+          <span>Payment</span>
+        </div>
+        <div class="step-node" id="stepNode-3">
+          <div class="step-circle">3</div>
+          <span>Details</span>
+        </div>
+        <div class="step-node" id="stepNode-4">
+          <div class="step-circle">4</div>
+          <span>Complete</span>
+        </div>
+      </div>
+
+      <!-- STEP 1: Geolocation Check -->
+      <div class="checkout-step-panel active" id="stepPanel-1">
+        <h3 style="font-size: 1rem; margin-bottom: 0.35rem;">Step 1: Geolocation Verification</h3>
+        <p style="color: var(--text-secondary); font-size: 0.75rem; margin-bottom: 1rem;">
+          To protect our baristas from malicious spam orders, we verify your proximity or require pre-payment online.
+        </p>
+
+        <div class="location-verification-card">
+          <div class="location-icon-status scanning" id="locationStatusIcon">📍</div>
+          <h4 id="locationStatusTitle" style="margin-bottom: 0.25rem; font-size: 0.95rem;">Checking your location...</h4>
+          <p id="locationStatusText" style="font-size: 0.75rem; color: var(--text-secondary);">
+            Please allow GPS access when prompted.
+          </p>
+
+          <div id="locationCoords" style="font-family: monospace; font-size: 0.75rem; margin-top: 0.5rem; display: none;">
+            Lat: <span id="coordLat">0</span>, Lng: <span id="coordLng">0</span>
+          </div>
+
+          <!-- MOCK GEOLOCATION TESTING PANEL -->
+          <div class="mock-gps-selector">
+            <label for="mockGps">🛠️ Developer Mock GPS Location (For Testing):</label>
+            <select id="mockGps" class="input-field" onchange="handleMockGpsChange()" style="font-size: 0.8rem; padding: 0.4rem; border-radius: 8px;">
+              <option value="actual">(Recommended) Actual Browser GPS</option>
+              <option value="near">Near Store (1.2 km away) - Fully unlocked</option>
+              <option value="medium">Medium Range (11.5 km away) - Forces Online Pay</option>
+              <option value="far">Extremely Far (62.8 km away) - Ordering Blocked</option>
+              <option value="deny">Deny Location Access - Forces Online Pay</option>
+            </select>
+          </div>
+        </div>
+
+        <button class="btn btn-primary" style="width: 100%;" id="locationNextBtn" onclick="nextStep(2)">
+          Continue to Payment Select
+        </button>
+      </div>
+
+      <!-- STEP 2: Payment Method Select -->
+      <div class="checkout-step-panel" id="stepPanel-2">
+        <h3 style="font-size: 1rem; margin-bottom: 0.35rem;">Step 2: Choose Payment Method</h3>
+        <p style="color: var(--text-secondary); font-size: 0.75rem; margin-bottom: 1rem;">
+          Select how you want to settle the order. Based on your location, pay at counter may be restricted.
+        </p>
+
+        <div class="payment-methods-grid">
+          <!-- Pay at Counter Option -->
+          <div class="payment-card" id="paymentCardCounter" onclick="selectPaymentMethod('counter')">
+            <div class="payment-card-icon">💵</div>
+            <div>
+              <div class="payment-card-title">Pay at Counter</div>
+              <div class="payment-card-desc">Prepare now, pay in cash/card on collection</div>
+            </div>
+          </div>
+          
+          <!-- Pay Online Option -->
+          <div class="payment-card" id="paymentCardOnline" onclick="selectPaymentMethod('online')">
+            <div class="payment-card-icon">📱</div>
+            <div>
+              <div class="payment-card-title">Pay Online Now</div>
+              <div class="payment-card-desc">Scan QR Code to pay immediately (DuitNow/TNG)</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Location warning alert banner -->
+        <div class="payment-alert" id="paymentLocationAlert" style="display: none;">
+          ⚠️ <strong>Spam Prevention:</strong> Pay at Counter is restricted since you are not verified within our 10 km geofence. Pre-payment online is required.
+        </div>
+
+        <div style="display: flex; gap: 0.75rem; margin-top: 1rem;">
+          <button class="btn btn-secondary" style="flex: 1;" onclick="prevStep(1)">Back</button>
+          <button class="btn btn-primary" style="flex: 1;" id="paymentNextBtn" onclick="nextStep(3)">Continue</button>
+        </div>
+      </div>
+
+      <!-- STEP 3: Customer Details -->
+      <div class="checkout-step-panel" id="stepPanel-3">
+        <h3 style="font-size: 1rem; margin-bottom: 0.35rem;">Step 3: Contact & Queue Tag</h3>
+        <p style="color: var(--text-secondary); font-size: 0.75rem; margin-bottom: 1rem;">
+          Please supply your contact details so we can tag your queue ticket.
+        </p>
+
+        <div style="display: flex; flex-direction: column; gap: 0.75rem;">
+          <div>
+            <label style="display: block; font-size: 0.75rem; margin-bottom: 0.25rem; color: var(--text-secondary);">Your Name</label>
+            <input type="text" class="input-field" id="customerName" placeholder="Enter name">
+          </div>
+          <div>
+            <label style="display: block; font-size: 0.75rem; margin-bottom: 0.25rem; color: var(--text-secondary);">Phone Number</label>
+            <input type="tel" class="input-field" id="customerPhone" placeholder="Enter phone (e.g. 012-3456789)">
+          </div>
+          <div>
+            <label style="display: block; font-size: 0.75rem; margin-bottom: 0.25rem; color: var(--text-secondary);">Table / Dine-in Notes (Optional)</label>
+            <input type="text" class="input-field" id="customerNotes" placeholder="e.g. Table 8 / Takeaway / Kiosk Order">
+          </div>
+        </div>
+
+        <div style="display: flex; gap: 0.75rem; margin-top: 1.5rem;">
+          <button class="btn btn-secondary" style="flex: 1;" onclick="prevStep(2)">Back</button>
+          <button class="btn btn-primary" style="flex: 1;" id="detailsNextBtn" onclick="handleDetailsStepSubmit()">Continue</button>
+        </div>
+      </div>
+
+      <!-- STEP 4: Online DuitNow QR Pre-Payment Mock -->
+      <div class="checkout-step-panel" id="stepPanel-4">
+        <!-- QR payment screen -->
+        <div id="onlinePaymentSubPanel" style="display: none; text-align: center;">
+          <h3 style="font-size: 1rem; margin-bottom: 0.25rem;">Step 4: Scan QR to Complete</h3>
+          <p style="color: var(--text-secondary); font-size: 0.75rem; margin-bottom: 0.5rem;">
+            Scan the DuitNow QR below using Touch 'n Go, MAE, or any local banking app to make payment.
+          </p>
+
+          <!-- DuitNow QR Mock Component -->
+          <div class="qr-pay-card">
+            <div class="qr-header">DuitNow QR</div>
+            <p style="font-size: 0.65rem; opacity: 0.8; margin-top: -0.25rem;">MALAYSIA NATIONAL QR STANDARDS</p>
+            
+            <div class="qr-frame">
+              <div class="qr-image-mock">
+                <!-- Center DuitNow branding -->
+                <div class="qr-center-logo">DUIT<br>NOW</div>
+              </div>
+            </div>
+            
+            <div>
+              <span class="qr-timer">Scan expires in: <span id="qrTimerDisplay">02:00</span></span>
+            </div>
+
+            <div class="qr-amount-pill" id="qrAmountDisplay">RM 0.00</div>
+          </div>
+
+          <!-- Simulation Button -->
+          <button class="btn btn-success" style="width: 100%; margin-top: 0.5rem; margin-bottom: 1rem; box-shadow: 0 0 10px rgba(16, 185, 129, 0.3);" onclick="simulateQrPaymentSuccess()">
+            ⚡ Simulate Mobile Scan Success
+          </button>
+        </div>
+
+        <!-- Pay at Counter Confirmation screen -->
+        <div id="counterPaymentSubPanel" style="display: none; text-align: center; padding: 1rem 0;">
+          <div style="font-size: 3rem; margin-bottom: 0.5rem;">🛎️</div>
+          <h3 style="font-size: 1.15rem; margin-bottom: 0.25rem;">Ready to Submit</h3>
+          <p style="color: var(--text-secondary); font-size: 0.75rem;">
+            You have selected <strong>Pay at Counter</strong>. We will queue the drink immediately. Please settle RM <span id="counterAmountDisplay">0.00</span> on pickup.
+          </p>
+        </div>
+
+        <!-- Submission Spinner -->
+        <div id="orderSubmitStatus" style="display: none; text-align: center; padding: 1.5rem 0;">
+          <div class="location-icon-status scanning">⌛</div>
+          <h4 style="margin-top: 0.5rem; font-size: 0.95rem;">Queueing order in kitchen...</h4>
+        </div>
+
+        <div style="display: flex; gap: 0.75rem; margin-top: 1rem;" id="paymentControlsRow">
+          <button class="btn btn-secondary" style="flex: 1;" onclick="prevStep(3)">Back</button>
+          <button class="btn btn-success" style="flex: 1;" id="submitOrderBtn" onclick="submitFinalOrder()">Submit Order</button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Fixed Bottom Navigation Bar for Mobile UI/UX -->
+  <nav class="bottom-nav">
+    <div class="bottom-nav-item active" id="nav-menu" onclick="switchTab('menu')">
+      <span class="bottom-nav-icon">🍵</span>
+      <span class="bottom-nav-label">Menu</span>
+    </div>
+    <div class="bottom-nav-item" id="nav-cart" onclick="switchTab('cart')">
+      <div style="position: relative; display: inline-block;">
+        <span class="bottom-nav-icon">🛒</span>
+        <span class="bottom-nav-badge" id="bottomCartBadge">0</span>
+      </div>
+      <span class="bottom-nav-label">Cart</span>
+    </div>
+    <div class="bottom-nav-item" id="nav-status" onclick="switchTab('status')">
+      <span class="bottom-nav-icon">📋</span>
+      <span class="bottom-nav-label">Status</span>
+    </div>
+  </nav>
+
+  <!-- Socket.io and Leaflet.js Scripts -->
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <!-- Main Logic -->
+  <script src="/js/app.js"></script>
+</body>
+</html>
