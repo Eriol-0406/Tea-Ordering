@@ -100,11 +100,15 @@ function renderMenu(items) {
       ? `<img class="menu-image" src="${item.image}" alt="${item.name}">`
       : `<div class="drink-fallback-icon">${icon}</div>`;
 
+    const tagTag = item.image 
+      ? '' 
+      : `<span class="menu-tag" style="position: absolute; top: 8px; left: 8px; background: rgba(0,0,0,0.65); padding: 2px 8px; border-radius: 4px; font-size: 0.7rem; color: var(--text-secondary);">${item.category}</span>`;
+
     return `
       <div class="menu-card glass-panel" data-category="${item.category}">
         <div class="menu-image-container">
           ${imageTag}
-          <span class="menu-tag" style="background: rgba(0,0,0,0.65);">${item.category}</span>
+          ${tagTag}
         </div>
         <div class="menu-content">
           <h3 class="menu-title">${item.name}</h3>
