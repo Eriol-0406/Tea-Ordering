@@ -530,3 +530,189 @@ function focusOrderCard(id) {
     }, 2500);
   }
 }
+
+// -------------------------------------------------------------
+// View switching
+// -------------------------------------------------------------
+function showView(name) {
+  document.querySelectorAll('.admin-view').forEach(v => {
+    v.style.display = v.id === `view-${name}` ? 'block' : 'none';
+  });
+  document.querySelectorAll('.admin-nav-item').forEach(a => {
+    a.classList.toggle('active', a.dataset.view === name);
+  });
+
+  if (name === 'menu') loadMenuStock();
+  if (name === 'history' && !historyState.loaded) loadHistory(0);
+  // Leaflet mis-measures while its panel is hidden, so re-measure on return.
+  if (name === 'dashboard' && mapInstance) {
+    setTimeout(() => mapInstance.invalidateSize(), 100);
+  }
+}
+
+// -------------------------------------------------------------
+// Menu stock (sold-out toggles)
+// -------------------------------------------------------------
+async function loadMenuStock() {
+  const box = document.getElementById('menuStockList');
+  try {
+    const res = await fetch('/api/menu');
+    const items = await res.json();
+
+    const byCategory = {};
+    items.forEach(i => {
+      (byCategory[i.category] = byCategory[i.category] || []).push(i);
+    });
+
+    box.innerHTML = Object.entries(byCategory).map(([category, list]) => `
+      <div class="stock-group">
+        <div class="stock-group-title">${esc(category)}</div>
+        ${list.map(item => `
+          <div class="stock-row ${item.available === false ? 'is-out' : ''}" id="stock-${item.id}">
+            <div class="stock-name">
+              ${esc(item.name)}
+              <span class="stock-state">${item.available === false ? 'Sold out' : 'Available'}</span>
+            </div>
+            <button class="btn ${item.available === false ? 'btn-success' : 'btn-danger'} stock-btn"
+                    onclick="toggleStock(${item.id}, ${item.available === false})">
+              ${item.available === false ? 'Back in stock' : 'Mark sold out'}
+            </button>
+          </div>
+        `).join('')}
+      </div>
+    `).join('');
+  } catch (err) {
+    box.innerHTML = `<div style="text-align:center; color:var(--danger); padding:3rem;">Could not load the menu.</div>`;
+  }
+}
+
+async function toggleStock(id, makeAvailable) {
+  try {
+    const res = await adminFetch(`/api/admin/menu/${id}/availability`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ available: makeAvailable })
+    });
+    if (!res.ok) throw new Error('Update failed');
+    loadMenuStock();
+  } catch (err) {
+    alert(`Could not update stock: ${err.message}`);
+  }
+}
+
+// -------------------------------------------------------------
+// Order history
+// -------------------------------------------------------------
+const historyState = { offset: 0, limit: 25, total: 0, loaded: false };
+
+function historyFilters() {
+  return {
+    from: document.getElementById('histFrom').value,
+    to: document.getElementById('histTo').value,
+    status: document.getElementById('histStatus').value,
+    q: document.getElementById('histQuery').value.trim()
+  };
+}
+
+function historyQueryString(extra) {
+  const f = Object.assign(historyFilters(), extra || {});
+  const params = new URLSearchParams();
+  Object.entries(f).forEach(([k, v]) => { if (v) params.set(k, v); });
+  return params.toString();
+}
+
+async function loadHistory(offset) {
+  historyState.offset = Math.max(offset, 0);
+  const box = document.getElementById('historyResults');
+  box.innerHTML = `<div style="text-align:center; color:var(--text-secondary); padding:3rem;">Searching...</div>`;
+
+  try {
+    const qs = historyQueryString({ limit: historyState.limit, offset: historyState.offset });
+    const res = await adminFetch(`/api/admin/history?${qs}`);
+    if (!res.ok) throw new Error('Search failed');
+    const data = await res.json();
+
+    historyState.total = data.total;
+    historyState.loaded = true;
+    renderHistory(data);
+  } catch (err) {
+    box.innerHTML = `<div style="text-align:center; color:var(--danger); padding:3rem;">${esc(err.message)}</div>`;
+  }
+}
+
+function renderHistory(data) {
+  const box = document.getElementById('historyResults');
+
+  document.getElementById('histSummary').innerHTML = `
+    <span><strong>${data.total}</strong> order${data.total === 1 ? '' : 's'}</span>
+    <span>Paid revenue: <strong style="color:var(--accent-color);">RM ${data.revenue.toFixed(2)}</strong></span>
+  `;
+
+  if (!data.orders.length) {
+    box.innerHTML = `<div style="text-align:center; color:var(--text-secondary); padding:3rem;">No orders match those filters.</div>`;
+    document.getElementById('histPager').style.display = 'none';
+    return;
+  }
+
+  box.innerHTML = `
+    <div class="history-table-wrap">
+      <table class="history-table">
+        <thead>
+          <tr>
+            <th>Order</th><th>When</th><th>Customer</th><th>Items</th>
+            <th>Total</th><th>Payment</th><th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${data.orders.map(o => {
+            const when = new Date(o.createdAt);
+            const items = o.items.map(i => `${i.quantity}x ${esc(i.name)}`).join('<br>');
+            return `
+              <tr>
+                <td><strong>${esc(o.id)}</strong><br><span class="hist-zone">${esc(o.zoneName || '-')}</span></td>
+                <td>${when.toLocaleDateString()}<br><span class="hist-zone">${when.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</span></td>
+                <td>${esc(o.customerName)}<br><span class="hist-zone">${esc(o.phone)}</span></td>
+                <td class="hist-items">${items}</td>
+                <td>RM ${o.total.toFixed(2)}</td>
+                <td>${esc(o.paymentMethod)}<br><span class="hist-zone" style="color:${o.paymentStatus === 'paid' ? 'var(--success)' : 'var(--warning)'};">${esc(o.paymentStatus)}</span></td>
+                <td><span class="hist-status hist-${esc(o.status)}">${esc(o.status)}</span></td>
+              </tr>
+            `;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+
+  const pager = document.getElementById('histPager');
+  pager.style.display = 'flex';
+  const page = Math.floor(historyState.offset / historyState.limit) + 1;
+  const pages = Math.max(Math.ceil(historyState.total / historyState.limit), 1);
+  document.getElementById('histPageLabel').innerText = `Page ${page} of ${pages}`;
+  document.getElementById('histPrev').disabled = historyState.offset === 0;
+  document.getElementById('histNext').disabled = historyState.offset + historyState.limit >= historyState.total;
+}
+
+function historyPage(direction) {
+  loadHistory(historyState.offset + direction * historyState.limit);
+}
+
+// The CSV endpoint needs the auth header, so it is fetched and handed to the
+// browser as a blob rather than opened as a plain link.
+async function downloadHistoryCsv() {
+  try {
+    const res = await adminFetch(`/api/admin/history.csv?${historyQueryString()}`);
+    if (!res.ok) throw new Error('Export failed');
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `otea-orders-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    alert(`Could not export: ${err.message}`);
+  }
+}

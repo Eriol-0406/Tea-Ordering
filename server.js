@@ -652,9 +652,10 @@ function trackingView(order) {
 // API Endpoints
 // -------------------------------------------------------------
 
-// 1. Get restaurant menu
+// 1. Get restaurant menu, annotated with what is currently sold out
 app.get('/api/menu', (req, res) => {
-  res.json(menuItems);
+  const soldOut = store.unavailableIds();
+  res.json(menuItems.map(item => Object.assign({}, item, { available: !soldOut.has(item.id) })));
 });
 
 // 1b. Public runtime config for the customer app
@@ -708,6 +709,7 @@ app.post('/api/orders', (req, res) => {
   }
 
   // Calculate order items and total price securely
+  const soldOutIds = store.unavailableIds();
   let total = 0;
   const enrichedItems = [];
 
@@ -715,6 +717,15 @@ app.post('/api/orders', (req, res) => {
     const original = menuItems.find(m => m.id === cartItem.id);
     if (!original) {
       return res.status(400).json({ error: `Invalid item reference: ID ${cartItem.id}` });
+    }
+
+    // Checked here as well as in the UI: a stale page could still submit an
+    // item that sold out while the customer was choosing.
+    if (soldOutIds.has(original.id)) {
+      return res.status(409).json({
+        error: `Sorry, ${original.name} just sold out. Please remove it and try again.`,
+        soldOutItemId: original.id
+      });
     }
 
     const varIdx = typeof cartItem.variantIndex === 'number' ? cartItem.variantIndex : 0;
@@ -897,6 +908,83 @@ app.get('/api/admin/reports', requireAdmin, (req, res) => {
     salesByDay: store.salesByDay(30),
     topDrinks: store.topDrinks(20)
   });
+});
+
+// 4c. Admin: order history with filters
+app.get('/api/admin/history', requireAdmin, (req, res) => {
+  const { from, to, status, q } = req.query;
+  const limit = Math.min(parseInt(req.query.limit, 10) || 50, 500);
+  const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+
+  const validStatuses = ['pending', 'preparing', 'ready', 'completed', 'cancelled'];
+  if (status && !validStatuses.includes(status)) {
+    return res.status(400).json({ error: 'Invalid status filter' });
+  }
+
+  res.json(store.searchOrders({
+    from: cleanText(from, 10) || null,
+    to: cleanText(to, 10) || null,
+    status: status || null,
+    q: cleanText(q, 60) || null,
+    limit,
+    offset
+  }));
+});
+
+// 4d. Admin: same query as a CSV download for spreadsheets/accounting
+app.get('/api/admin/history.csv', requireAdmin, (req, res) => {
+  const { from, to, status, q } = req.query;
+  const result = store.searchOrders({
+    from: cleanText(from, 10) || null,
+    to: cleanText(to, 10) || null,
+    status: status || null,
+    q: cleanText(q, 60) || null,
+    limit: 500,
+    offset: 0
+  });
+
+  const rows = [['Order ID', 'Date', 'Customer', 'Phone', 'Zone', 'Items',
+                 'Total (RM)', 'Payment', 'Payment Status', 'Status']];
+
+  for (const o of result.orders) {
+    const items = o.items.map(i => `${i.quantity}x ${i.name} (${i.variantName})`).join(' | ');
+    rows.push([o.id, o.createdAt, o.customerName, o.phone, o.zoneName || '',
+               items, o.total.toFixed(2), o.paymentMethod, o.paymentStatus, o.status]);
+  }
+
+  // A leading =, +, - or @ makes spreadsheets treat a cell as a formula, so
+  // those are prefixed with a quote before the value is written.
+  const escapeCell = (value) => {
+    let text = String(value === null || value === undefined ? '' : value);
+    if (/^[=+\-@]/.test(text)) text = "'" + text;
+    return '"' + text.replace(/"/g, '""') + '"';
+  };
+
+  const csv = rows.map(r => r.map(escapeCell).join(',')).join('\r\n');
+  const stamp = new Date().toISOString().slice(0, 10);
+
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="orders-${stamp}.csv"`);
+  res.send('\uFEFF' + csv); // BOM so Excel reads the Chinese drink names correctly
+});
+
+// 4e. Admin: mark a drink sold out / back in stock
+app.post('/api/admin/menu/:id/availability', requireAdmin, (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const item = menuItems.find(m => m.id === id);
+  if (!item) {
+    return res.status(404).json({ error: 'Menu item not found' });
+  }
+  if (typeof req.body?.available !== 'boolean') {
+    return res.status(400).json({ error: 'available must be true or false' });
+  }
+
+  store.setAvailability(id, req.body.available);
+
+  // Customers with the menu open see it grey out without reloading.
+  io.emit('menu_availability_changed', { id, available: req.body.available });
+
+  res.json({ success: true, id, available: req.body.available });
 });
 
 // 5. Admin update status

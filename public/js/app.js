@@ -1,5 +1,6 @@
 // Global Application State
 let menuData = [];
+let activeCategory = 'All';
 let cart = [];
 let userLocation = null;
 let currentStep = 1;
@@ -78,6 +79,15 @@ function initSocket() {
     restaurantLocation = info;
   });
 
+  // Staff marking a drink sold out greys it out on open menus immediately.
+  socket.on('menu_availability_changed', ({ id, available }) => {
+    const item = menuData.find(m => m.id === id);
+    if (!item) return;
+    item.available = available;
+    renderMenu(currentlyVisibleItems());
+    if (!available) flagSoldOutInCart();
+  });
+
   socket.on('order_status_update', (data) => {
     if (activeOrder && activeOrder.id === data.id) {
       if (data.status) activeOrder.status = data.status;
@@ -146,6 +156,8 @@ function renderMenu(items) {
     else if (item.category === "Cold Brew") icon = "🧊";
     else if (item.category === "Smoothie") icon = "🍧";
 
+    const soldOut = item.available === false;
+
     // Image mapping logic
     const imageTag = item.image 
       ? `<img class="menu-image" src="${esc(item.image)}" alt="${esc(item.name)}" loading="lazy" decoding="async">`
@@ -156,16 +168,19 @@ function renderMenu(items) {
       : `<span class="menu-tag" style="position: absolute; top: 8px; left: 8px; background: rgba(0,0,0,0.65); padding: 2px 8px; border-radius: 4px; font-size: 0.7rem; color: var(--text-secondary);">${esc(item.category)}</span>`;
 
     return `
-      <div class="menu-card glass-panel" data-category="${esc(item.category)}">
+      <div class="menu-card glass-panel${soldOut ? ' sold-out' : ''}" data-category="${esc(item.category)}">
         <div class="menu-image-container">
           ${imageTag}
           ${tagTag}
+          ${soldOut ? '<span class="sold-out-badge">Sold Out 售完</span>' : ''}
         </div>
         <div class="menu-content">
           <h3 class="menu-title">${esc(item.name)}</h3>
           <div class="menu-price-row">
             <span class="menu-price">${priceText}</span>
-            <button class="add-btn-round" onclick="openModifiersModal(${item.id})">+</button>
+            ${soldOut
+              ? '<button class="add-btn-round" disabled aria-label="Sold out">+</button>'
+              : `<button class="add-btn-round" onclick="openModifiersModal(${item.id})">+</button>`}
           </div>
         </div>
       </div>
@@ -173,7 +188,35 @@ function renderMenu(items) {
   }).join('');
 }
 
+function currentlyVisibleItems() {
+  const searchInput = document.getElementById('searchInput');
+  const query = (searchInput ? searchInput.value : '').toLowerCase().trim();
+
+  return menuData.filter(item => {
+    const inCategory = activeCategory === 'All' || item.category === activeCategory;
+    const matchesQuery = !query ||
+      item.name.toLowerCase().includes(query) ||
+      item.category.toLowerCase().includes(query);
+    return inCategory && matchesQuery;
+  });
+}
+
+// Warn once if something in the cart just sold out, and refresh the drawer so
+// the affected lines show their badge.
+function flagSoldOutInCart() {
+  const gone = cart.filter(c => {
+    const item = menuData.find(m => m.id === c.id);
+    return item && item.available === false;
+  });
+  renderCartDrawer();
+  if (gone.length) {
+    const names = gone.map(c => (menuData.find(m => m.id === c.id) || {}).name).join(', ');
+    alert(`Sold out while you were ordering: ${names}. Please remove it from your cart.`);
+  }
+}
+
 function filterCategory(category) {
+  activeCategory = category;
   const tabs = document.querySelectorAll('.category-tab');
   tabs.forEach(tab => {
     if (tab.innerText.toLowerCase() === category.toLowerCase() || 
@@ -184,21 +227,11 @@ function filterCategory(category) {
     }
   });
 
-  if (category === 'All') {
-    renderMenu(menuData);
-  } else {
-    const filtered = menuData.filter(item => item.category === category);
-    renderMenu(filtered);
-  }
+  renderMenu(currentlyVisibleItems());
 }
 
 function handleSearch() {
-  const query = document.getElementById('searchInput').value.toLowerCase().trim();
-  const filtered = menuData.filter(item => 
-    item.name.toLowerCase().includes(query) || 
-    item.category.toLowerCase().includes(query)
-  );
-  renderMenu(filtered);
+  renderMenu(currentlyVisibleItems());
 }
 
 // -------------------------------------------------------------
@@ -207,6 +240,10 @@ function handleSearch() {
 function openModifiersModal(itemId) {
   const item = menuData.find(m => m.id === itemId);
   if (!item) return;
+  if (item.available === false) {
+    alert(`${item.name} is sold out right now.`);
+    return;
+  }
 
   activeItemForCustomization = item;
   selectedVariantIndex = 0;
@@ -507,7 +544,13 @@ function renderCartDrawer() {
     return;
   }
 
-  checkoutBtn.disabled = false;
+  const hasSoldOut = cart.some(c => {
+    const m = menuData.find(x => x.id === c.id);
+    return m && m.available === false;
+  });
+  checkoutBtn.disabled = hasSoldOut;
+  checkoutBtn.innerText = hasSoldOut ? 'Remove sold-out items to continue' : 'Proceed to Checkout';
+
   let total = 0;
 
   itemsContainer.innerHTML = cart.map(cartItem => {
@@ -544,10 +587,13 @@ function renderCartDrawer() {
     const addonsString = addonsTextList.length ? ` | ${addonsTextList.join(', ')}` : '';
     const optionsText = `${variant.name}${teaBaseString} | ${cartItem.ice} | ${cartItem.sugar}${addonsString}`;
 
+    const lineSoldOut = item.available === false;
+
     return `
-      <div class="cart-item">
+      <div class="cart-item${lineSoldOut ? ' sold-out-line' : ''}">
         <div class="cart-item-info">
-          <div class="cart-item-name">${esc(item.name)}</div>
+          <div class="cart-item-name">${esc(item.name)}${lineSoldOut
+            ? '<span class="cart-sold-out-tag">Sold out</span>' : ''}</div>
           <div class="cart-item-options">${esc(optionsText)}</div>
           <div class="cart-item-price">RM ${itemTotal.toFixed(2)} <span style="font-size:0.7rem; color:var(--text-muted); font-weight:400;">(RM ${unitPrice.toFixed(2)} ea)</span></div>
           <div class="cart-item-controls">

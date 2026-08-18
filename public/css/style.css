@@ -1860,3 +1860,204 @@ h1, h2, h3, h4, h5, h6 {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* -------------------------------------------------------------
+   Sold-out menu items
+   ------------------------------------------------------------- */
+.menu-card.sold-out .menu-image-container {
+  filter: grayscale(1);
+  opacity: 0.45;
+}
+
+.menu-card.sold-out .menu-title,
+.menu-card.sold-out .menu-price {
+  opacity: 0.5;
+}
+
+.sold-out-badge {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%) rotate(-8deg);
+  background: rgba(239, 95, 120, 0.92);
+  color: #fff;
+  font-family: var(--font-heading);
+  font-weight: 700;
+  font-size: 0.75rem;
+  letter-spacing: 0.02em;
+  padding: 0.3rem 0.7rem;
+  border-radius: 6px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.add-btn-round:disabled {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-muted);
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.add-btn-round:disabled:hover {
+  transform: none;
+}
+
+.cart-item.sold-out-line {
+  border-left: 3px solid var(--danger);
+  padding-left: 0.6rem;
+}
+
+.cart-sold-out-tag {
+  display: inline-block;
+  margin-left: 0.4rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--danger);
+  text-transform: uppercase;
+}
+
+/* -------------------------------------------------------------
+   Admin: menu stock + order history
+   ------------------------------------------------------------- */
+.stock-group { margin-bottom: 1.25rem; }
+
+.stock-group-title {
+  font-family: var(--font-heading);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  margin-bottom: 0.5rem;
+}
+
+.stock-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  margin-bottom: 0.4rem;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.stock-row.is-out { border-color: rgba(239, 95, 120, 0.4); }
+
+.stock-name {
+  font-size: 0.88rem;
+  font-weight: 500;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.stock-state {
+  display: block;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.stock-row.is-out .stock-state { color: var(--danger); }
+
+.stock-btn {
+  flex-shrink: 0;
+  padding: 0.45rem 0.8rem;
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.history-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: flex-end;
+  margin-bottom: 0.85rem;
+}
+
+.history-filters label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+}
+
+.history-filters .input-field {
+  min-height: 44px;
+  font-size: 0.85rem;
+  padding: 0.4rem 0.6rem;
+  border-radius: 8px;
+}
+
+.history-summary {
+  display: flex;
+  gap: 1.25rem;
+  flex-wrap: wrap;
+  font-size: 0.85rem;
+  padding: 0.6rem 0.75rem;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  margin-bottom: 0.75rem;
+}
+
+/* Wide tables scroll inside their own box rather than the page. */
+.history-table-wrap { overflow-x: auto; }
+
+.history-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+  min-width: 720px;
+}
+
+.history-table th {
+  text-align: left;
+  font-family: var(--font-heading);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  padding: 0.5rem 0.6rem;
+  border-bottom: 1px solid var(--panel-border);
+  position: sticky;
+  top: 0;
+  background: var(--surface-sheet);
+}
+
+.history-table td {
+  padding: 0.6rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  vertical-align: top;
+}
+
+.hist-zone { font-size: 0.72rem; color: var(--text-muted); }
+.hist-items { max-width: 260px; }
+
+.hist-status {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: capitalize;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.hist-completed { background: rgba(63, 191, 149, 0.16); color: var(--success); }
+.hist-cancelled { background: rgba(239, 95, 120, 0.16); color: var(--danger); }
+.hist-pending, .hist-preparing, .hist-ready {
+  background: rgba(var(--accent-rgb), 0.16);
+  color: var(--accent-color);
+}
+
+.history-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-top: 0.85rem;
+}
+
+.history-pager .btn { padding: 0.5rem 1rem; font-size: 0.82rem; }
+.history-pager .btn:disabled { opacity: 0.4; cursor: not-allowed; }

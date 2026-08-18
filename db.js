@@ -55,6 +55,14 @@ db.exec(`
     addons_text  TEXT
   );
 
+  -- Only sold-out items are stored; anything absent is available. The menu
+  -- itself still lives in server.js, so this survives menu edits by id.
+  CREATE TABLE IF NOT EXISTS menu_availability (
+    menu_item_id INTEGER PRIMARY KEY,
+    available    INTEGER NOT NULL DEFAULT 1,
+    updated_at   TEXT NOT NULL
+  );
+
   CREATE INDEX IF NOT EXISTS idx_orders_created  ON orders(created_at DESC);
   CREATE INDEX IF NOT EXISTS idx_orders_status   ON orders(status);
   CREATE INDEX IF NOT EXISTS idx_orders_session  ON orders(session_id);
@@ -138,6 +146,13 @@ const stmts = {
            SUM(total) AS revenue
     FROM orders WHERE payment_status = 'paid' AND status = 'completed'
     GROUP BY day ORDER BY day DESC LIMIT ?
+  `),
+  listUnavailable: db.prepare(`SELECT menu_item_id FROM menu_availability WHERE available = 0`),
+  setAvailability: db.prepare(`
+    INSERT INTO menu_availability (menu_item_id, available, updated_at)
+    VALUES (@id, @available, @updatedAt)
+    ON CONFLICT(menu_item_id) DO UPDATE SET
+      available = excluded.available, updated_at = excluded.updated_at
   `),
   topDrinks: db.prepare(`
     SELECT oi.name, SUM(oi.quantity) AS sold, SUM(oi.price * oi.quantity) AS revenue
@@ -231,6 +246,70 @@ module.exports = {
   countRecentOrdersForIp(ip, windowMs) {
     const since = new Date(Date.now() - windowMs).toISOString();
     return stmts.countRecentForIp.get(ip, since).n;
+  },
+
+  // -----------------------------------------------------------
+  // Menu availability (sold-out toggles)
+  // -----------------------------------------------------------
+  unavailableIds() {
+    return new Set(stmts.listUnavailable.all().map(r => r.menu_item_id));
+  },
+
+  setAvailability(menuItemId, available) {
+    stmts.setAvailability.run({
+      id: menuItemId,
+      available: available ? 1 : 0,
+      updatedAt: new Date().toISOString()
+    });
+  },
+
+  // -----------------------------------------------------------
+  // Order history search
+  //
+  // Filters are composed into one WHERE clause with bound parameters - never
+  // string-interpolated - so a search term cannot alter the query.
+  // -----------------------------------------------------------
+  searchOrders({ from, to, status, q, limit = 50, offset = 0 } = {}) {
+    const where = [];
+    const params = {};
+
+    if (from) { where.push('created_at >= @from'); params.from = from + 'T00:00:00.000Z'; }
+    if (to) { where.push('created_at <= @to'); params.to = to + 'T23:59:59.999Z'; }
+    if (status) { where.push('status = @status'); params.status = status; }
+    if (q) {
+      where.push('(id LIKE @q OR customer_name LIKE @q OR phone LIKE @q)');
+      params.q = '%' + q + '%';
+    }
+
+    const clause = where.length ? 'WHERE ' + where.join(' AND ') : '';
+    const paidClause = 'WHERE ' + where.concat("payment_status = 'paid'").join(' AND ');
+
+    const total = db.prepare(`SELECT COUNT(*) AS n FROM orders ${clause}`).get(params).n;
+    const revenue = db.prepare(
+      `SELECT COALESCE(SUM(total), 0) AS sum FROM orders ${paidClause}`
+    ).get(params).sum;
+
+    const rows = db.prepare(
+      `SELECT * FROM orders ${clause} ORDER BY created_at DESC LIMIT @limit OFFSET @offset`
+    ).all(Object.assign({}, params, { limit: Math.min(limit, 500), offset }));
+
+    const ids = rows.map(r => r.id);
+    const byOrder = new Map();
+    if (ids.length) {
+      const placeholders = ids.map(() => '?').join(',');
+      for (const item of db.prepare(
+        `SELECT * FROM order_items WHERE order_id IN (${placeholders}) ORDER BY id`
+      ).all(...ids)) {
+        if (!byOrder.has(item.order_id)) byOrder.set(item.order_id, []);
+        byOrder.get(item.order_id).push(rowToItem(item));
+      }
+    }
+
+    return {
+      total,
+      revenue: Math.round(revenue * 100) / 100,
+      orders: rows.map(row => rowToOrder(row, byOrder.get(row.id) || []))
+    };
   },
 
   salesByDay(days = 30) {

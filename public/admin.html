@@ -41,13 +41,13 @@
     </div>
     
     <nav class="admin-nav">
-      <a href="#" class="admin-nav-item active">
+      <a href="#" class="admin-nav-item active" data-view="dashboard" onclick="showView('dashboard'); return false;">
         <span>📊</span> Dashboard
       </a>
-      <a href="#" class="admin-nav-item" onclick="alert('Menu Editor module coming soon in version 2.0')">
-        <span>🍵</span> Edit Menu
+      <a href="#" class="admin-nav-item" data-view="menu" onclick="showView('menu'); return false;">
+        <span>🍵</span> Menu Stock
       </a>
-      <a href="#" class="admin-nav-item" onclick="alert('Order Logs and Billing module coming soon in version 2.0')">
+      <a href="#" class="admin-nav-item" data-view="history" onclick="showView('history'); return false;">
         <span>📜</span> Order History
       </a>
     </nav>
@@ -72,6 +72,9 @@
         </button>
       </div>
     </header>
+
+    <!-- ========== DASHBOARD VIEW ========== -->
+    <div class="admin-view" id="view-dashboard">
 
     <!-- Metrics Stats Board -->
     <section class="admin-metrics-bar">
@@ -144,6 +147,68 @@
         </div>
       </section>
 
+    </div>
+
+    </div><!-- /view-dashboard -->
+
+    <!-- ========== MENU STOCK VIEW ========== -->
+    <div class="admin-view" id="view-menu" style="display:none;">
+      <section class="admin-orders-list-panel" style="max-width:900px;">
+        <div class="panel-title-row">
+          <h3 style="font-size: 1.1rem;">Menu Stock</h3>
+          <button class="btn btn-secondary" onclick="loadMenuStock()" style="padding:0.5rem 1rem; font-size:0.85rem;">🔄 Refresh</button>
+        </div>
+        <p style="font-size:0.8rem; color:var(--text-secondary); margin-bottom:0.75rem;">
+          Switch a drink off when you run out. It greys out on the customer menu
+          straight away and cannot be ordered.
+        </p>
+        <div class="admin-orders-scroll" id="menuStockList">
+          <div style="text-align:center; color:var(--text-secondary); padding:3rem;">Loading menu...</div>
+        </div>
+      </section>
+    </div>
+
+    <!-- ========== ORDER HISTORY VIEW ========== -->
+    <div class="admin-view" id="view-history" style="display:none;">
+      <section class="admin-orders-list-panel">
+        <div class="panel-title-row">
+          <h3 style="font-size: 1.1rem;">Order History</h3>
+          <button class="btn btn-secondary" onclick="downloadHistoryCsv()" style="padding:0.5rem 1rem; font-size:0.85rem;">⬇️ Export CSV</button>
+        </div>
+
+        <div class="history-filters">
+          <label>From<input type="date" id="histFrom" class="input-field"></label>
+          <label>To<input type="date" id="histTo" class="input-field"></label>
+          <label>Status
+            <select id="histStatus" class="input-field">
+              <option value="">All</option>
+              <option value="pending">Pending</option>
+              <option value="preparing">Preparing</option>
+              <option value="ready">Ready</option>
+              <option value="completed">Completed</option>
+              <option value="cancelled">Cancelled</option>
+            </select>
+          </label>
+          <label style="flex:1; min-width:170px;">Search
+            <input type="search" id="histQuery" class="input-field" placeholder="Order ID, name or phone">
+          </label>
+          <button class="btn btn-primary" onclick="loadHistory(0)" style="padding:0.5rem 1.1rem; font-size:0.85rem;">Search</button>
+        </div>
+
+        <div class="history-summary" id="histSummary"></div>
+
+        <div class="admin-orders-scroll" id="historyResults">
+          <div style="text-align:center; color:var(--text-secondary); padding:3rem;">
+            Choose a date range and press Search.
+          </div>
+        </div>
+
+        <div class="history-pager" id="histPager" style="display:none;">
+          <button class="btn btn-secondary" id="histPrev" onclick="historyPage(-1)">Previous</button>
+          <span id="histPageLabel" style="font-size:0.8rem; color:var(--text-secondary);"></span>
+          <button class="btn btn-secondary" id="histNext" onclick="historyPage(1)">Next</button>
+        </div>
+      </section>
     </div>
 
   </main>
