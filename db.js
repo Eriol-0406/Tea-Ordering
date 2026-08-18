@@ -13,7 +13,19 @@ const path = require('path');
 const DATA_DIR = path.join(__dirname, 'data');
 const DB_FILE = process.env.DATABASE_FILE || path.join(DATA_DIR, 'orders.db');
 
-fs.mkdirSync(DATA_DIR, { recursive: true });
+// SQLite needs a writable directory. Serverless platforms mount the deployment
+// read-only, so fail with an explanation rather than an opaque EROFS stack.
+try {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+} catch (err) {
+  if (err.code === 'EROFS' || err.code === 'EACCES') {
+    throw new Error(
+      'Cannot write the SQLite database on this platform (read-only filesystem). ' +
+      'Set DATABASE_URL to a Postgres connection string - see migrations/001_init_postgres.sql.'
+    );
+  }
+  throw err;
+}
 
 const db = new Database(DB_FILE);
 db.pragma('journal_mode = WAL');   // survives an unclean shutdown mid-write
