@@ -3,3 +3,9 @@ node_modules/
 .gemini/
 .agents/
 *.log
+
+# Persisted order data (contains customer PII - never commit)
+data/
+
+# Local environment overrides
+.env

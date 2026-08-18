@@ -1,29 +1,48 @@
 /* ==========================================================================
-   Premium Dark & Amber Glassmorphism Theme (Mobile-First)
+   OTea / GreyOne - Navy & Slate Glassmorphism Theme (Mobile-First)
+
+   Palette is taken from the shop's own menus: the deep indigo of the OTea
+   board and the cool grey ink wash of the GreyOne coffee/matcha card.
+   Every colour below is a variable - recolouring the whole app means editing
+   this block and nothing else.
    ========================================================================== */
 
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@300;400;500;600;700;800&display=swap');
 
 :root {
-  --bg-color: #0c0c0e;
-  --bg-gradient: radial-gradient(circle at top, #181822 0%, #0c0c0e 100%);
-  --panel-bg: rgba(24, 24, 32, 0.75);
-  --panel-border: rgba(255, 255, 255, 0.08);
-  --accent-color: #f59e0b;
-  --accent-gradient: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
-  --accent-glow: 0 0 15px rgba(245, 158, 11, 0.4);
-  --text-primary: #f9fafb;
-  --text-secondary: #9ca3af;
-  --text-muted: #6b7280;
-  --success: #10b981;
-  --success-gradient: linear-gradient(135deg, #10b981 0%, #059669 100%);
-  --danger: #f43f5e;
-  --danger-gradient: linear-gradient(135deg, #f43f5e 0%, #e11d48 100%);
-  --warning: #fbbf24;
+  /* Surfaces - deep navy from the OTea menu board */
+  --bg-color: #0a0f1e;
+  --bg-gradient: radial-gradient(circle at top, #182444 0%, #0a0f1e 100%);
+  --panel-bg: rgba(20, 28, 48, 0.78);
+  --panel-border: rgba(150, 175, 220, 0.14);
+  --surface-sheet: #131b30;   /* opaque bottom sheets */
+  --surface-modal: #0e1527;   /* full-screen checkout */
+  --surface-sunken: #101728;  /* inset wells, map canvas */
+
+  /* Accent - lifted periwinkle blue. Light enough to stay legible both as
+     text on the dark background and as a button fill under dark text. */
+  --accent-color: #7fa9f0;
+  --accent-rgb: 127, 169, 240;
+  --accent-gradient: linear-gradient(135deg, #8fb6f5 0%, #4f79c4 100%);
+  --accent-glow: 0 0 15px rgba(127, 169, 240, 0.35);
+  --on-accent: #08101f;
+
+  /* Text - cool greys pulled from the GreyOne ink wash */
+  --text-primary: #eef2f9;
+  --text-secondary: #a3b2cc;
+  --text-muted: #6d7b96;
+
+  --success: #3fbf95;
+  --success-gradient: linear-gradient(135deg, #3fbf95 0%, #24956f 100%);
+  --danger: #ef5f78;
+  --danger-gradient: linear-gradient(135deg, #ef5f78 0%, #cf3f58 100%);
+  --warning: #d9b479;
+  --warning-rgb: 217, 180, 121;
+
   --font-heading: 'Outfit', 'Inter', sans-serif;
   --font-body: 'Inter', sans-serif;
-  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.2);
-  --shadow-lg: 0 8px 32px 0 rgba(0, 0, 0, 0.4);
+  --shadow-sm: 0 2px 8px rgba(4, 8, 18, 0.35);
+  --shadow-lg: 0 8px 32px 0 rgba(4, 8, 18, 0.55);
   --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
@@ -82,11 +101,12 @@ h1, h2, h3, h4, h5, h6 {
   border: none;
   text-decoration: none;
   gap: 0.5rem;
+  min-height: 48px;
 }
 
 .btn-primary {
   background: var(--accent-gradient);
-  color: #000;
+  color: var(--on-accent);
 }
 
 .btn-primary:hover {
@@ -136,7 +156,7 @@ h1, h2, h3, h4, h5, h6 {
 .input-field:focus {
   outline: none;
   border-color: var(--accent-color);
-  box-shadow: 0 0 8px rgba(245, 158, 11, 0.2);
+  box-shadow: 0 0 8px rgba(var(--accent-rgb), 0.2);
 }
 
 /* ==========================================================================
@@ -145,7 +165,7 @@ h1, h2, h3, h4, h5, h6 {
 .app-header {
   padding: 1rem 0;
   border-bottom: 1px solid var(--panel-border);
-  background: rgba(12, 12, 14, 0.85);
+  background: rgba(9, 14, 28, 0.88);
   backdrop-filter: blur(10px);
   position: sticky;
   top: 0;
@@ -183,7 +203,7 @@ h1, h2, h3, h4, h5, h6 {
   top: -8px;
   right: -8px;
   background: var(--accent-gradient);
-  color: #000;
+  color: var(--on-accent);
   font-family: var(--font-heading);
   font-weight: 700;
   font-size: 0.75rem;
@@ -221,7 +241,10 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 .category-tab {
-  padding: 0.5rem 1rem;
+  padding: 0.65rem 1.1rem;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
   border-radius: 20px;
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid var(--panel-border);
@@ -237,7 +260,7 @@ h1, h2, h3, h4, h5, h6 {
 .category-tab.active {
   background: var(--accent-color);
   border-color: var(--accent-color);
-  color: #000;
+  color: var(--on-accent);
   font-weight: 600;
 }
 
@@ -278,14 +301,14 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 .menu-card:hover {
-  border-color: rgba(245, 158, 11, 0.3);
+  border-color: rgba(var(--accent-rgb), 0.3);
 }
 
 .menu-image-container {
   height: 110px;
   overflow: hidden;
   position: relative;
-  background: linear-gradient(135deg, #1e1e24, #121216);
+  background: linear-gradient(135deg, #1a2340, #101728);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -336,29 +359,35 @@ h1, h2, h3, h4, h5, h6 {
   justify-content: space-between;
   align-items: center;
   margin-top: auto;
+  gap: 0.4rem;
 }
 
+/* The 44px touch target leaves little room beside it on a narrow card, so the
+   price stays on one line and shrinks slightly rather than wrapping. */
 .menu-price {
   font-family: var(--font-heading);
   font-weight: 700;
   color: var(--accent-color);
-  font-size: 0.95rem;
+  font-size: 0.9rem;
+  white-space: nowrap;
+  min-width: 0;
 }
 
 .add-btn-round {
-  width: 28px;
-  height: 28px;
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
   border-radius: 50%;
   background: var(--accent-gradient);
-  color: #000;
+  color: var(--on-accent);
   border: none;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
   font-weight: 800;
-  font-size: 1.1rem;
-  box-shadow: 0 2px 6px rgba(245, 158, 11, 0.3);
+  font-size: 1.3rem;
+  box-shadow: 0 2px 6px rgba(var(--accent-rgb), 0.3);
   transition: var(--transition);
 }
 
@@ -390,7 +419,7 @@ h1, h2, h3, h4, h5, h6 {
 .bottom-sheet {
   width: 100%;
   max-width: 500px;
-  background: #14141a;
+  background: var(--surface-sheet);
   border-top: 1px solid var(--panel-border);
   border-radius: 20px 20px 0 0;
   box-shadow: 0 -8px 24px rgba(0,0,0,0.5);
@@ -422,6 +451,13 @@ h1, h2, h3, h4, h5, h6 {
   font-size: 1.4rem;
   color: var(--text-secondary);
   cursor: pointer;
+  min-width: 44px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin: -0.5rem -0.5rem -0.5rem 0;
 }
 
 .modifier-section {
@@ -462,7 +498,7 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 .modifier-pill.active {
-  background: rgba(245, 158, 11, 0.1);
+  background: rgba(var(--accent-rgb), 0.1);
   border-color: var(--accent-color);
   color: var(--accent-color);
   font-weight: 600;
@@ -482,7 +518,7 @@ h1, h2, h3, h4, h5, h6 {
 
 .addon-row.active {
   border-color: var(--accent-color);
-  background: rgba(245,158,11,0.04);
+  background: rgba(var(--accent-rgb), 0.04);
 }
 
 /* ==========================================================================
@@ -565,9 +601,10 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 .qty-btn {
-  width: 22px;
-  height: 22px;
-  border-radius: 6px;
+  width: 38px;
+  height: 38px;
+  border-radius: 8px;
+  font-size: 1.05rem;
   background: rgba(255, 255, 255, 0.06);
   border: 1px solid var(--panel-border);
   color: var(--text-primary);
@@ -622,7 +659,7 @@ h1, h2, h3, h4, h5, h6 {
   left: 0;
   width: 100vw;
   height: 100vh;
-  background: rgba(0, 0, 0, 0.8);
+  background: rgba(5, 9, 20, 0.82);
   backdrop-filter: blur(8px);
   z-index: 300;
   display: none;
@@ -638,7 +675,7 @@ h1, h2, h3, h4, h5, h6 {
   width: 100%;
   height: 100%;
   max-width: 500px;
-  background: #0f0f13;
+  background: var(--surface-modal);
   display: flex;
   flex-direction: column;
   padding: 1.5rem;
@@ -701,7 +738,7 @@ h1, h2, h3, h4, h5, h6 {
   width: 24px;
   height: 24px;
   border-radius: 50%;
-  background: #121216;
+  background: #101728;
   border: 2px solid rgba(255,255,255,0.08);
   display: flex;
   align-items: center;
@@ -715,7 +752,7 @@ h1, h2, h3, h4, h5, h6 {
 .step-node.active .step-circle {
   border-color: var(--accent-color);
   color: var(--accent-color);
-  box-shadow: 0 0 8px rgba(245, 158, 11, 0.3);
+  box-shadow: 0 0 8px rgba(var(--accent-rgb), 0.3);
 }
 
 .step-node.active {
@@ -725,7 +762,7 @@ h1, h2, h3, h4, h5, h6 {
 .step-node.completed .step-circle {
   background: var(--success);
   border-color: var(--success);
-  color: #000;
+  color: var(--on-accent);
 }
 
 .checkout-step-panel {
@@ -796,7 +833,7 @@ h1, h2, h3, h4, h5, h6 {
 
 .payment-card.selected {
   border-color: var(--accent-color);
-  background: rgba(245, 158, 11, 0.05);
+  background: rgba(var(--accent-rgb), 0.05);
 }
 
 .payment-card.disabled {
@@ -821,10 +858,10 @@ h1, h2, h3, h4, h5, h6 {
 .payment-alert {
   font-size: 0.75rem;
   color: var(--warning);
-  background: rgba(251, 191, 36, 0.08);
+  background: rgba(var(--warning-rgb), 0.08);
   padding: 0.6rem;
   border-radius: 8px;
-  border: 1px solid rgba(251, 191, 36, 0.15);
+  border: 1px solid rgba(var(--warning-rgb), 0.15);
   margin-top: 0.75rem;
 }
 
@@ -973,7 +1010,7 @@ h1, h2, h3, h4, h5, h6 {
   width: 32px;
   height: 32px;
   border-radius: 50%;
-  background: #16161c;
+  background: #141d33;
   border: 1px solid rgba(255, 255, 255, 0.08);
   display: flex;
   align-items: center;
@@ -1004,7 +1041,7 @@ h1, h2, h3, h4, h5, h6 {
 .timeline-node.completed .timeline-icon-box {
   background: var(--success);
   border-color: var(--success);
-  color: #000;
+  color: var(--on-accent);
 }
 
 .map-frame-container {
@@ -1033,14 +1070,14 @@ h1, h2, h3, h4, h5, h6 {
 
 @keyframes pulseScan {
   0% { transform: scale(1); opacity: 0.8; }
-  50% { transform: scale(1.1); opacity: 1; filter: drop-shadow(0 0 8px rgba(251,191,36,0.5)); }
+  50% { transform: scale(1.1); opacity: 1; filter: drop-shadow(0 0 8px rgba(var(--warning-rgb), 0.5)); }
   100% { transform: scale(1); opacity: 0.8; }
 }
 
 @keyframes pulseNodeGlow {
-  0% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.4); }
-  70% { box-shadow: 0 0 0 10px rgba(245, 158, 11, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0); }
+  0% { box-shadow: 0 0 0 0 rgba(var(--accent-rgb), 0.4); }
+  70% { box-shadow: 0 0 0 10px rgba(var(--accent-rgb), 0); }
+  100% { box-shadow: 0 0 0 0 rgba(var(--accent-rgb), 0); }
 }
 
 /* ==========================================================================
@@ -1163,7 +1200,7 @@ h1, h2, h3, h4, h5, h6 {
 /* Sidebar navigation */
 .admin-sidebar {
   width: 280px;
-  background: rgba(12, 12, 16, 0.95);
+  background: rgba(9, 14, 28, 0.95);
   border-right: 1px solid var(--panel-border);
   padding: 2rem 1.5rem;
   display: flex;
@@ -1215,14 +1252,14 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 .admin-nav-item.active {
-  color: #000;
+  color: var(--on-accent);
   background: var(--accent-gradient);
   font-weight: 600;
   box-shadow: var(--accent-glow);
 }
 
 .admin-nav-item.active:hover {
-  color: #000;
+  color: var(--on-accent);
   transform: none;
 }
 
@@ -1412,9 +1449,9 @@ h1, h2, h3, h4, h5, h6 {
 
 .spam-risk-badge.medium-risk,
 .spam-risk-badge.suspicious-pattern {
-  background: rgba(251, 191, 36, 0.12);
+  background: rgba(var(--warning-rgb), 0.12);
   color: var(--warning);
-  border: 1px solid rgba(251, 191, 36, 0.25);
+  border: 1px solid rgba(var(--warning-rgb), 0.25);
 }
 
 .spam-risk-badge.high-risk,
@@ -1536,7 +1573,7 @@ h1, h2, h3, h4, h5, h6 {
 
 /* Leaflet Dark Theme Map Overrides */
 .leaflet-container {
-  background: #111116 !important;
+  background: var(--surface-sunken) !important;
   font-family: var(--font-body) !important;
 }
 
@@ -1624,7 +1661,7 @@ h1, h2, h3, h4, h5, h6 {
   left: 0;
   right: 0;
   height: 64px;
-  background: rgba(12, 12, 16, 0.85);
+  background: rgba(9, 14, 28, 0.88);
   backdrop-filter: blur(25px);
   -webkit-backdrop-filter: blur(25px);
   border-top: 1px solid rgba(255, 255, 255, 0.08);
@@ -1660,7 +1697,7 @@ h1, h2, h3, h4, h5, h6 {
 
 .bottom-nav-item.active {
   color: var(--accent-color);
-  text-shadow: 0 0 10px rgba(245, 158, 11, 0.25);
+  text-shadow: 0 0 10px rgba(var(--accent-rgb), 0.25);
 }
 
 .bottom-nav-item.active .bottom-nav-icon {
@@ -1672,7 +1709,7 @@ h1, h2, h3, h4, h5, h6 {
   top: -2px;
   right: -8px;
   background: var(--accent-gradient);
-  color: #000;
+  color: var(--on-accent);
   font-family: var(--font-heading);
   font-weight: 700;
   font-size: 0.65rem;
@@ -1706,3 +1743,120 @@ h1, h2, h3, h4, h5, h6 {
   }
 }
 
+
+/* -------------------------------------------------------------
+   Admin sign-in gate
+   ------------------------------------------------------------- */
+#adminWorkspace {
+  display: flex;
+  flex: 1;
+  width: 100%;
+  min-width: 0;
+  min-height: 100vh;
+}
+
+.admin-login-gate {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 1.5rem;
+}
+
+.admin-login-card {
+  width: 100%;
+  max-width: 360px;
+  padding: 2rem;
+  border-radius: 18px;
+  text-align: left;
+}
+
+.admin-login-error {
+  margin-top: 0.9rem;
+  padding: 0.6rem 0.75rem;
+  border-radius: 10px;
+  font-size: 0.8rem;
+  color: var(--danger);
+  background: rgba(255, 71, 87, 0.08);
+  border: 1px solid rgba(255, 71, 87, 0.28);
+}
+
+@media (max-width: 991px) {
+  #adminWorkspace {
+    flex-direction: column;
+    overflow-y: auto;
+  }
+}
+
+/* -------------------------------------------------------------
+   Customer tracking map + receipt
+   ------------------------------------------------------------- */
+
+/* The map div had no height rule, so it collapsed to 0 and left a dead
+   250-320px hole on the tracking screen. */
+.map-frame-container {
+  position: relative;
+  overflow: hidden;
+  background: var(--surface-sunken);
+}
+
+#customerMap {
+  width: 100%;
+  height: 100%;
+}
+
+/* Long drink names ran flush into the price on narrow phones. */
+.receipt-card .receipt-row > div {
+  gap: 0.75rem;
+}
+
+.receipt-card .receipt-row > div > span:last-child {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.receipt-card .receipt-row > div > span:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Admin status filter was a 28px-tall select - awkward on a phone. */
+.panel-title-row .input-field {
+  min-height: 44px;
+}
+
+/* -------------------------------------------------------------
+   Admin order cards on narrow screens
+   ------------------------------------------------------------- */
+
+/* Drink name ran flush into its price the same way the receipt did. */
+.admin-order-item-row > div {
+  gap: 0.75rem;
+}
+
+.admin-order-item-row > div > span:last-child {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.admin-order-item-row > div > span:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Keep the order total on one line instead of wrapping mid-amount. */
+.order-card-total-row {
+  gap: 0.75rem;
+}
+
+.order-card-total-row > div:last-child {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* Safety net: never let a long price run under the add button. */
+.menu-price {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

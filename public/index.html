@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Luxe Drinks - Place and track your premium bubble tea and coffee orders in real-time.">
-  <title>Luxe Drinks - Premium Ordering</title>
+  <meta name="description" content="OTea x GreyOne - Place and track your tea, coffee and matcha orders in real-time.">
+  <title>OTea x GreyOne - Order</title>
   
   <!-- Leaflet CSS for maps -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
@@ -18,7 +18,7 @@
     <div class="container header-container">
       <div class="logo-wrapper" onclick="resetToMenu()" style="cursor: pointer;">
         <span class="logo-icon">🍵</span>
-        <h1>LUXE DRINKS</h1>
+        <h1>OTea <span style="font-weight:400; opacity:0.75;">x</span> GreyOne</h1>
       </div>
       
       <!-- Cart trigger button -->
@@ -40,6 +40,7 @@
         <button class="category-tab" onclick="filterCategory('Fruit Tea')">Fruit Tea</button>
         <button class="category-tab" onclick="filterCategory('Pure Tea')">Pure Tea</button>
         <button class="category-tab" onclick="filterCategory('Cold Brew')">Cold Brew</button>
+        <button class="category-tab" onclick="filterCategory('Smoothie')">Smoothie</button>
         <button class="category-tab" onclick="filterCategory('Coffee')">Coffee</button>
         <button class="category-tab" onclick="filterCategory('Non-Coffee')">Non-Coffee</button>
         <button class="category-tab" onclick="filterCategory('Matcha')">Matcha</button>
@@ -200,10 +201,9 @@
       <div class="modifier-section" id="modIceSection">
         <span class="modifier-label">Ice Level</span>
         <div class="modifier-options-grid">
-          <div class="modifier-pill active" data-ice="Normal Ice" onclick="selectIce(this)">Normal Ice</div>
-          <div class="modifier-pill" data-ice="Less Ice" onclick="selectIce(this)">Less Ice</div>
-          <div class="modifier-pill" data-ice="No Ice" onclick="selectIce(this)">No Ice</div>
-          <div class="modifier-pill" data-ice="More Ice" onclick="selectIce(this)">More Ice</div>
+          <div class="modifier-pill active" data-ice="Normal Ice" onclick="selectIce(this)">Normal 正常</div>
+          <div class="modifier-pill" data-ice="Less Ice" onclick="selectIce(this)">Less Ice 少冰</div>
+          <div class="modifier-pill" data-ice="No Ice" onclick="selectIce(this)">No Ice 去冰</div>
         </div>
       </div>
 
@@ -211,11 +211,20 @@
       <div class="modifier-section" id="modSugarSection">
         <span class="modifier-label">Sugar Level</span>
         <div class="modifier-options-grid">
-          <div class="modifier-pill active" data-sugar="Normal Sugar" onclick="selectSugar(this)">Normal</div>
-          <div class="modifier-pill" data-sugar="Less Sugar" onclick="selectSugar(this)">Less (70%)</div>
-          <div class="modifier-pill" data-sugar="Half Sugar" onclick="selectSugar(this)">Half (50%)</div>
-          <div class="modifier-pill" data-sugar="Slight Sugar" onclick="selectSugar(this)">Slight (30%)</div>
-          <div class="modifier-pill" data-sugar="No Sugar" onclick="selectSugar(this)">No Sugar</div>
+          <div class="modifier-pill active" data-sugar="Normal Sugar" onclick="selectSugar(this)">Normal 正常</div>
+          <div class="modifier-pill" data-sugar="Less Sugar" onclick="selectSugar(this)">Less 少糖 (70%)</div>
+          <div class="modifier-pill" data-sugar="Half Sugar" onclick="selectSugar(this)">Half 半糖 (50%)</div>
+          <div class="modifier-pill" data-sugar="Slight Sugar" onclick="selectSugar(this)">Slight 微糖 (30%)</div>
+          <div class="modifier-pill" data-sugar="No Sugar" onclick="selectSugar(this)">No Sugar 无糖</div>
+        </div>
+      </div>
+
+      <!-- Crystal Boba: general add-on across the tea range -->
+      <div class="modifier-section" id="modBobaAddonSection" style="display: none;">
+        <span class="modifier-label">Add On 附加</span>
+        <div class="addon-row" id="addonCrystalBoba" onclick="toggleAddon('crystalBoba')">
+          <span style="font-size: 0.85rem; font-weight: 500;">🧋 Crystal Boba 晶露波波</span>
+          <span style="font-size: 0.85rem; font-weight: 700; color: var(--accent-color);">+ RM 2.00</span>
         </div>
       </div>
 
@@ -278,7 +287,7 @@
       <div class="checkout-step-panel active" id="stepPanel-1">
         <h3 style="font-size: 1rem; margin-bottom: 0.35rem;">Step 1: Geolocation Verification</h3>
         <p style="color: var(--text-secondary); font-size: 0.75rem; margin-bottom: 1rem;">
-          To protect our baristas from malicious spam orders, we verify your proximity or require pre-payment online.
+          To protect our baristas from spam orders, we verify that you are near the shop before accepting an order.
         </p>
 
         <div class="location-verification-card">
@@ -292,15 +301,21 @@
             Lat: <span id="coordLat">0</span>, Lng: <span id="coordLng">0</span>
           </div>
 
+          <button class="btn btn-secondary" id="locationRetryBtn" onclick="runLocationCheck()"
+                  style="display: none; margin-top: 0.75rem; padding: 0.4rem 0.9rem; font-size: 0.8rem;">
+            🔄 Retry Location Check
+          </button>
+
           <!-- MOCK GEOLOCATION TESTING PANEL -->
           <div class="mock-gps-selector">
             <label for="mockGps">🛠️ Developer Mock GPS Location (For Testing):</label>
             <select id="mockGps" class="input-field" onchange="handleMockGpsChange()" style="font-size: 0.8rem; padding: 0.4rem; border-radius: 8px;">
               <option value="actual">(Recommended) Actual Browser GPS</option>
-              <option value="near">Near Store (1.2 km away) - Fully unlocked</option>
-              <option value="medium">Medium Range (11.5 km away) - Forces Online Pay</option>
-              <option value="far">Extremely Far (62.8 km away) - Ordering Blocked</option>
-              <option value="deny">Deny Location Access - Forces Online Pay</option>
+              <option value="shop">At the shop zone - Fully unlocked</option>
+              <option value="hub">At CCACC Innovation Hub - Pay at counter</option>
+              <option value="outside">Outside all zones (~10 km) - Ordering blocked</option>
+              <option value="far">Far beyond service radius - Ordering blocked</option>
+              <option value="deny">Deny Location Access - No coordinates</option>
             </select>
           </div>
         </div>
@@ -382,7 +397,7 @@
         <div id="onlinePaymentSubPanel" style="display: none; text-align: center;">
           <h3 style="font-size: 1rem; margin-bottom: 0.25rem;">Step 4: Scan QR to Complete</h3>
           <p style="color: var(--text-secondary); font-size: 0.75rem; margin-bottom: 0.5rem;">
-            Scan the DuitNow QR below using Touch 'n Go, MAE, or any local banking app to make payment.
+            Scan the DuitNow QR below using Touch 'n Go, MAE, or any local banking app. Staff confirm receipt at the counter before your drink is handed over.
           </p>
 
           <!-- DuitNow QR Mock Component -->
@@ -406,7 +421,7 @@
 
           <!-- Simulation Button -->
           <button class="btn btn-success" style="width: 100%; margin-top: 0.5rem; margin-bottom: 1rem; box-shadow: 0 0 10px rgba(16, 185, 129, 0.3);" onclick="simulateQrPaymentSuccess()">
-            ⚡ Simulate Mobile Scan Success
+            ⚡ I Have Transferred - Submit Order
           </button>
         </div>
 

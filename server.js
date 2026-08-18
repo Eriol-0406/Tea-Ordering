@@ -2,25 +2,73 @@ const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
 const path = require('path');
+const fs = require('fs');
+const crypto = require('crypto');
 
 const app = express();
 const server = http.createServer(app);
-const io = socketIo(server, {
-  cors: {
-    origin: "*",
-    methods: ["GET", "POST"]
-  }
-});
 
-// Port configuration
+// -------------------------------------------------------------
+// Configuration (override via environment variables)
+// -------------------------------------------------------------
 const PORT = process.env.PORT || 3000;
 
-// Geolocation of restaurant (Singapore / KL coordinates)
-const RESTAURANT_LAT = 1.352083;
-const RESTAURANT_LNG = 103.819836;
+// Ordering zones (shop + any satellite pickup points) come from config/zones.json.
+// Env vars still win for the shop coordinate so a host dashboard can override it.
+const zoneConfig = JSON.parse(fs.readFileSync(path.join(__dirname, 'config', 'zones.json'), 'utf8'));
+const MAX_SERVICE_RADIUS_KM = zoneConfig.maxServiceRadiusKm || 25;
 
-app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
+const ORDER_ZONES = (zoneConfig.zones || []).filter(zone => {
+  if (Number.isFinite(zone.lat) && Number.isFinite(zone.lng)) return true;
+  console.warn(`Zone "${zone.name}" has no coordinates yet - it is disabled until lat/lng are filled in (config/zones.json).`);
+  return false;
+});
+
+const shopZone = ORDER_ZONES.find(z => z.isShop) || ORDER_ZONES[0];
+if (!shopZone) throw new Error('No usable ordering zone configured in config/zones.json');
+
+const RESTAURANT_LAT = parseFloat(process.env.RESTAURANT_LAT || shopZone.lat);
+const RESTAURANT_LNG = parseFloat(process.env.RESTAURANT_LNG || shopZone.lng);
+if (process.env.RESTAURANT_LAT) shopZone.lat = RESTAURANT_LAT;
+if (process.env.RESTAURANT_LNG) shopZone.lng = RESTAURANT_LNG;
+
+// Staff password for the admin console. Generated at boot if unset so the panel
+// is never silently open; the generated value is printed to the server log.
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || crypto.randomBytes(9).toString('base64url');
+const ADMIN_PASSWORD_IS_GENERATED = !process.env.ADMIN_PASSWORD;
+
+// Flip to 'true' only once a real payment gateway confirms funds server-side
+// (see the webhook stub near /api/payments/webhook). While this is false, no
+// order is money-committed, so every order gets strict proximity rules.
+const PAYMENT_GATEWAY_ENABLED = process.env.PAYMENT_GATEWAY_ENABLED === 'true';
+
+// Exposes the "Mock GPS" testing dropdown in the checkout flow.
+const ENABLE_MOCK_GPS = process.env.ENABLE_MOCK_GPS === 'true' || process.env.NODE_ENV !== 'production';
+
+// Number of reverse proxies in front of this app (Cloudflare/nginx/Render = 1).
+// Without this, req.ip is the proxy's address and every customer shares one
+// rate-limit bucket.
+const TRUST_PROXY = process.env.TRUST_PROXY || '0';
+app.set('trust proxy', /^\d+$/.test(TRUST_PROXY) ? parseInt(TRUST_PROXY, 10) : TRUST_PROXY);
+
+const io = socketIo(server, {
+  cors: { origin: process.env.CORS_ORIGIN || false, methods: ["GET", "POST"] }
+});
+
+app.use(express.json({ limit: '100kb' }));
+// Filenames are not content-hashed, so only images (which rarely change and
+// carry the real page weight) get a long cache. HTML/CSS/JS revalidate on every
+// load via ETag, so a deploy takes effect immediately instead of leaving
+// customers on stale code for an hour.
+app.use(express.static(path.join(__dirname, 'public'), {
+  setHeaders: (res, filePath) => {
+    if (/\.(png|jpe?g|webp|svg|ico)$/i.test(filePath)) {
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+    } else {
+      res.setHeader('Cache-Control', 'no-cache');
+    }
+  }
+}));
 
 // Categorized Menu Database in Ringgit Malaysia (RM)
 const menuItems = [
@@ -239,7 +287,20 @@ const menuItems = [
     image: "/images/glutinousgreencoldbrew.png"
   },
 
-  // 5. Coffee Series (咖啡系列)
+  // 5. Smoothie (冰沙)
+  {
+    id: 35,
+    name: "Fresh Watermelon Jasmine Tea (西瓜冰沙)",
+    category: "Smoothie",
+    description: "Fresh watermelon blended with jasmine green tea into an icy smoothie.",
+    variants: [
+      { name: "L (700ml)", price: 12.00 },
+      { name: "Tea Macchiato (奶盖茶)", price: 15.00 }
+    ],
+    image: "/images/watermelonsmoothie.png"
+  },
+
+  // 6. Coffee Series (咖啡系列)
   {
     id: 21,
     name: "Americano (美式)",
@@ -290,7 +351,7 @@ const menuItems = [
     ]
   },
 
-  // 6. Non-Coffee Series
+  // 7. Non-Coffee Series
   {
     id: 26,
     name: "Iced Chocolate (冰巧克力)",
@@ -298,8 +359,7 @@ const menuItems = [
     description: "Rich dark cocoa blended with ice-cold premium milk. (500ml)",
     variants: [
       { name: "Standard (500ml)", price: 9.00 }
-    ],
-    image: "/images/iceblend.png"
+    ]
   },
   {
     id: 27,
@@ -331,7 +391,7 @@ const menuItems = [
     image: "/images/tarolatte.png"
   },
 
-  // 7. Matcha Series (抹茶系列)
+  // 8. Matcha Series (抹茶系列)
   {
     id: 29,
     name: "Matcha Latte (抹茶拿铁)",
@@ -339,8 +399,7 @@ const menuItems = [
     description: "Premium stone-ground matcha whisked with fresh milk. (350ml)",
     variants: [
       { name: "Standard (350ml)", price: 11.00 }
-    ],
-    image: "/images/matcha_latte.jpg" // Maps to our generated image asset!
+    ]
   },
   {
     id: 30,
@@ -381,13 +440,124 @@ const menuItems = [
   }
 ];
 
-let orders = [];
+// Crystal Boba is offered across the OTea tea range only - the GreyOne
+// coffee/matcha side has its own add-ons. Mirrored in public/js/app.js.
+const BOBA_CATEGORIES = ['Milk Tea', 'Fruit Tea', 'Pure Tea', 'Smoothie'];
 
-// Memory-based tracking for IP order rate limiting and sessions
-const ipOrderLimits = {};
-const sessionUnpaidCounterOrders = {};
+// -------------------------------------------------------------
+// Order storage (SQLite - see db.js)
+// -------------------------------------------------------------
+const store = require('./db');
 
-// Helper: Haversine distance in km
+// Anything written by the previous JSON-file version is pulled in once, then
+// that file is renamed to .imported so it is never re-read.
+store.importLegacyJson(path.join(__dirname, 'data', 'orders.json'));
+console.log(`Order database ready: ${store.file}`);
+
+function shutdown(signal) {
+  try { store.close(); } catch (err) { /* already closed */ }
+  console.log(`${signal} received - database closed. Bye.`);
+  process.exit(0);
+}
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+
+// -------------------------------------------------------------
+// Anti-spam limits. Both counters are derived from the database, so a restart
+// no longer wipes someone's rate limit or their outstanding unpaid orders.
+// -------------------------------------------------------------
+const RATE_WINDOW_MS = 15 * 60 * 1000;
+const MAX_ORDERS_PER_WINDOW = 4;
+
+setInterval(() => {
+  pruneAdminTokens();
+  pruneLoginAttempts();
+}, 10 * 60 * 1000).unref();
+
+// -------------------------------------------------------------
+// Admin authentication
+// -------------------------------------------------------------
+const ADMIN_TOKEN_TTL_MS = 12 * 60 * 60 * 1000;
+const adminTokens = new Map(); // token -> expiry timestamp
+const loginAttempts = new Map(); // ip -> [timestamps of failures]
+const MAX_LOGIN_FAILURES = 8;
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+
+function pruneAdminTokens() {
+  const now = Date.now();
+  for (const [token, expiry] of adminTokens) {
+    if (expiry <= now) adminTokens.delete(token);
+  }
+}
+
+function pruneLoginAttempts() {
+  const now = Date.now();
+  for (const [ip, stamps] of loginAttempts) {
+    const fresh = stamps.filter(ts => now - ts < LOGIN_WINDOW_MS);
+    if (fresh.length) loginAttempts.set(ip, fresh);
+    else loginAttempts.delete(ip);
+  }
+}
+
+function isValidAdminToken(token) {
+  if (!token) return false;
+  const expiry = adminTokens.get(token);
+  if (!expiry) return false;
+  if (expiry <= Date.now()) {
+    adminTokens.delete(token);
+    return false;
+  }
+  return true;
+}
+
+// Constant-time compare so the password cannot be recovered by timing responses.
+function passwordMatches(supplied) {
+  if (typeof supplied !== 'string') return false;
+  const a = Buffer.from(supplied);
+  const b = Buffer.from(ADMIN_PASSWORD);
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+}
+
+function requireAdmin(req, res, next) {
+  const header = req.headers.authorization || '';
+  const token = header.startsWith('Bearer ') ? header.slice(7) : null;
+  if (!isValidAdminToken(token)) {
+    return res.status(401).json({ error: 'Admin authentication required.' });
+  }
+  next();
+}
+
+app.post('/api/admin/login', (req, res) => {
+  const ip = req.ip;
+  const failures = (loginAttempts.get(ip) || []).filter(ts => Date.now() - ts < LOGIN_WINDOW_MS);
+
+  if (failures.length >= MAX_LOGIN_FAILURES) {
+    loginAttempts.set(ip, failures);
+    return res.status(429).json({ error: 'Too many failed sign-in attempts. Try again in 15 minutes.' });
+  }
+
+  if (!passwordMatches(req.body && req.body.password)) {
+    failures.push(Date.now());
+    loginAttempts.set(ip, failures);
+    return res.status(401).json({ error: 'Incorrect password.' });
+  }
+
+  loginAttempts.delete(ip);
+  const token = crypto.randomBytes(32).toString('hex');
+  adminTokens.set(token, Date.now() + ADMIN_TOKEN_TTL_MS);
+  res.json({ success: true, token, expiresIn: ADMIN_TOKEN_TTL_MS });
+});
+
+app.post('/api/admin/logout', requireAdmin, (req, res) => {
+  const token = (req.headers.authorization || '').slice(7);
+  adminTokens.delete(token);
+  res.json({ success: true });
+});
+
+// -------------------------------------------------------------
+// Helpers
+// -------------------------------------------------------------
 function calculateDistance(lat1, lon1, lat2, lon2) {
   const R = 6371; // Earth radius in km
   const dLat = deg2rad(lat2 - lat1);
@@ -404,38 +574,78 @@ function deg2rad(deg) {
   return deg * (Math.PI / 180);
 }
 
-function cleanIpLimits(ip) {
-  if (!ipOrderLimits[ip]) return;
-  const now = Date.now();
-  ipOrderLimits[ip] = ipOrderLimits[ip].filter(ts => now - ts < 15 * 60 * 1000);
+// Strips control characters and length-caps a free-text field before storage.
+function cleanText(value, maxLength) {
+  if (typeof value !== 'string') return '';
+  return value.replace(/[\x00-\x1F\x7F]/g, '').trim().slice(0, maxLength);
 }
 
-function getSpamRisk(distance, ip, sessionId) {
+// Finds the ordering zone the customer is standing in, nearest first.
+// Returns null when they are outside every configured zone.
+function resolveZone(lat, lng) {
+  let best = null;
+  for (const zone of ORDER_ZONES) {
+    const d = calculateDistance(zone.lat, zone.lng, lat, lng);
+    if (d <= zone.radiusKm && (!best || d < best.distance)) {
+      best = { zone, distance: d };
+    }
+  }
+  return best;
+}
+
+function getSpamRisk(distance, ip, sessionId, zoneName) {
   let riskLevel = 'Safe';
-  let reason = 'Location verified within range';
+  let reason = zoneName ? `Verified inside ${zoneName}` : 'Location verified within range';
 
   if (distance === null) {
     riskLevel = 'Medium Risk';
     reason = 'No geolocation coordinates provided';
-  } else if (distance > 15) {
+  } else if (!zoneName) {
     riskLevel = 'High Risk';
-    reason = `Extremely far location (${distance} km)`;
-  } else if (distance > 5) {
-    riskLevel = 'Medium Risk';
-    reason = `Moderate distance (${distance} km)`;
+    reason = `Outside every ordering zone (${distance} km from shop)`;
   }
 
-  if (ipOrderLimits[ip] && ipOrderLimits[ip].length >= 2) {
+  if (store.countRecentOrdersForIp(ip, RATE_WINDOW_MS) >= 2) {
     riskLevel = 'High Risk';
     reason += ' + Multiple rapid orders from same IP';
   }
 
-  if (sessionUnpaidCounterOrders[sessionId] && sessionUnpaidCounterOrders[sessionId] >= 1) {
+  if (store.countUnpaidForSession(sessionId) >= 1) {
     riskLevel = 'High Risk';
-    reason += ' + History of unpaid counter orders';
+    reason += ' + Has an unpaid outstanding order';
   }
 
   return { riskLevel, reason };
+}
+
+// Staff-only fields are stripped before an order reaches a customer.
+function customerView(order) {
+  return {
+    id: order.id,
+    customerName: order.customerName,
+    items: order.items,
+    total: order.total,
+    paymentMethod: order.paymentMethod,
+    paymentStatus: order.paymentStatus,
+    status: order.status,
+    latitude: order.latitude,
+    longitude: order.longitude,
+    distance: order.distance,
+    notes: order.notes,
+    createdAt: order.createdAt
+  };
+}
+
+// Narrower still: used for lookup by ID, which anyone could guess at.
+function trackingView(order) {
+  return {
+    id: order.id,
+    status: order.status,
+    paymentStatus: order.paymentStatus,
+    paymentMethod: order.paymentMethod,
+    total: order.total,
+    createdAt: order.createdAt
+  };
 }
 
 // -------------------------------------------------------------
@@ -447,21 +657,51 @@ app.get('/api/menu', (req, res) => {
   res.json(menuItems);
 });
 
+// 1b. Public runtime config for the customer app
+app.get('/api/config', (req, res) => {
+  res.json({
+    restaurant: { lat: RESTAURANT_LAT, lng: RESTAURANT_LNG },
+    // The client needs the zones to tell the customer where they can order
+    // from before they reach the submit button.
+    zones: ORDER_ZONES.map(z => ({
+      name: z.name,
+      lat: z.lat,
+      lng: z.lng,
+      radiusKm: z.radiusKm,
+      allowCounter: z.allowCounter,
+      isShop: !!z.isShop
+    })),
+    maxServiceRadiusKm: MAX_SERVICE_RADIUS_KM,
+    enableMockGps: ENABLE_MOCK_GPS,
+    paymentGatewayEnabled: PAYMENT_GATEWAY_ENABLED
+  });
+});
+
 // 2. Place an order
 app.post('/api/orders', (req, res) => {
-  const { customerName, phone, items, paymentMethod, location, sessionId, notes } = req.body;
-  const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+  const { items, paymentMethod, location } = req.body || {};
+  const ipAddress = req.ip || req.socket.remoteAddress;
 
-  if (!customerName || !phone || !items || !items.length || !paymentMethod || !sessionId) {
+  const customerName = cleanText(req.body && req.body.customerName, 80);
+  const phone = cleanText(req.body && req.body.phone, 25);
+  const notes = cleanText(req.body && req.body.notes, 300);
+  const sessionId = cleanText(req.body && req.body.sessionId, 64);
+
+  if (!customerName || !phone || !Array.isArray(items) || !items.length || !paymentMethod || !sessionId) {
     return res.status(400).json({ error: "Missing required order details" });
   }
-
-  // IP Rate Limit Check
-  cleanIpLimits(ipAddress);
-  if (!ipOrderLimits[ipAddress]) {
-    ipOrderLimits[ipAddress] = [];
+  if (!['counter', 'online'].includes(paymentMethod)) {
+    return res.status(400).json({ error: "Unknown payment method" });
   }
-  if (ipOrderLimits[ipAddress].length >= 4) {
+  if (!/^[0-9+\-\s()]{7,25}$/.test(phone)) {
+    return res.status(400).json({ error: "Please enter a valid contact number" });
+  }
+  if (items.length > 30) {
+    return res.status(400).json({ error: "Too many distinct items in one order" });
+  }
+
+  // IP Rate Limit Check (counted from the database, so restarts do not reset it)
+  if (store.countRecentOrdersForIp(ipAddress, RATE_WINDOW_MS) >= MAX_ORDERS_PER_WINDOW) {
     return res.status(429).json({
       error: "Too many orders placed. To prevent spam, ordering is locked for 15 minutes."
     });
@@ -482,13 +722,25 @@ app.post('/api/orders', (req, res) => {
       return res.status(400).json({ error: `Invalid variant selection for item ${original.name}` });
     }
 
+    // Quantity is the one number that scales the bill, so it is validated hard.
+    const quantity = Number(cartItem.quantity);
+    if (!Number.isInteger(quantity) || quantity < 1 || quantity > 20) {
+      return res.status(400).json({ error: `Invalid quantity for ${original.name} (1-20 per item)` });
+    }
+
     const variant = original.variants[varIdx];
     let itemPrice = variant.price;
 
-    // Apply Coffee Add-ons calculations
     let addonCharge = 0;
     let selectedAddons = [];
 
+    // Crystal Boba add-on (tea range only)
+    if (BOBA_CATEGORIES.includes(original.category) && cartItem.addons && cartItem.addons.crystalBoba) {
+      addonCharge += 2.00;
+      selectedAddons.push("Crystal Boba (+RM2.00)");
+    }
+
+    // Apply Coffee Add-ons calculations
     if (original.category === 'Coffee' && cartItem.addons && cartItem.addons.extraEspresso) {
       addonCharge += 2.50;
       selectedAddons.push("Extra Espresso Shot (+RM2.50)");
@@ -507,17 +759,17 @@ app.post('/api/orders', (req, res) => {
     }
 
     const finalPricePerUnit = itemPrice + addonCharge;
-    total += finalPricePerUnit * cartItem.quantity;
+    total += finalPricePerUnit * quantity;
 
     enrichedItems.push({
       id: original.id,
       name: original.name,
       variantName: variant.name,
       price: finalPricePerUnit,
-      quantity: cartItem.quantity,
-      ice: cartItem.ice || "Normal Ice",
-      sugar: cartItem.sugar || "Normal Sugar",
-      teaBase: cartItem.teaBase || "",
+      quantity,
+      ice: cleanText(cartItem.ice, 40) || "Normal Ice",
+      sugar: cleanText(cartItem.sugar, 40) || "Normal Sugar",
+      teaBase: cleanText(cartItem.teaBase, 60),
       addonsText: selectedAddons.join(", ")
     });
   }
@@ -528,64 +780,83 @@ app.post('/api/orders', (req, res) => {
   let lat = null;
   let lng = null;
 
-  if (location && typeof location.lat === 'number' && typeof location.lng === 'number') {
+  if (location && Number.isFinite(location.lat) && Number.isFinite(location.lng) &&
+      Math.abs(location.lat) <= 90 && Math.abs(location.lng) <= 180) {
     lat = location.lat;
     lng = location.lng;
     distance = calculateDistance(RESTAURANT_LAT, RESTAURANT_LNG, lat, lng);
     hasLocation = true;
   }
 
-  // Geofencing Spam Rules
+  // An order is only "money-committed" once a gateway has actually confirmed
+  // funds. While PAYMENT_GATEWAY_ENABLED is false the QR flow is a simulation,
+  // so online orders carry the same spam exposure as counter orders and get the
+  // same proximity rules.
+  const paymentGuaranteed = PAYMENT_GATEWAY_ENABLED && paymentMethod === 'online';
+
+  // Zone-based geofencing: the customer must be standing inside one of the
+  // configured ordering zones, and that zone decides whether Pay at Counter is
+  // offered there.
+  let matchedZone = null;
+
   if (!hasLocation) {
-    if (paymentMethod === 'counter') {
+    if (!paymentGuaranteed) {
       return res.status(403).json({
-        error: "Location verification is required to place a 'Pay at Counter' order. Please enable GPS location access or complete online payment now."
+        error: "Location verification is required to place this order. Please enable GPS location access and try again."
       });
     }
   } else {
-    if (distance > 25.0) {
+    if (distance > MAX_SERVICE_RADIUS_KM) {
       return res.status(403).json({
-        error: `Order blocked. You are currently ${distance} km away, which is outside our 25 km delivery/service radius.`
+        error: `Order blocked. You are currently ${distance} km away, which is outside our ${MAX_SERVICE_RADIUS_KM} km service radius.`
       });
     }
-    if (distance > 10.0 && paymentMethod === 'counter') {
+
+    const match = resolveZone(lat, lng);
+    if (!match && !paymentGuaranteed) {
+      const zoneNames = ORDER_ZONES.map(z => z.name).join(' or ');
       return res.status(403).json({
-        error: `You are ${distance} km away. Pay at Counter is restricted for customers beyond 10 km to prevent spam. Please complete online payment to proceed.`
+        error: `Ordering is only available at ${zoneNames}. You appear to be ${distance} km from the shop.`
       });
+    }
+
+    if (match) {
+      matchedZone = match.zone;
+      if (paymentMethod === 'counter' && !matchedZone.allowCounter) {
+        return res.status(403).json({
+          error: `Pay at Counter is not available at ${matchedZone.name}. Please choose online payment.`
+        });
+      }
     }
   }
 
-  // Session unpaid counter orders check
-  if (paymentMethod === 'counter' && sessionUnpaidCounterOrders[sessionId] >= 2) {
+  // Session unpaid order check
+  if (!paymentGuaranteed && store.countUnpaidForSession(sessionId) >= 2) {
     return res.status(403).json({
-      error: "Pay at Counter option is disabled for this session due to multiple unpaid outstanding orders. Please proceed with Online Payment."
+      error: "Ordering is paused for this session due to multiple unpaid outstanding orders. Please settle them at the counter first."
     });
   }
 
   // Evaluate final risk score
-  const { riskLevel, reason } = getSpamRisk(distance, ipAddress, sessionId);
-
-  // Success: Register IP order timestamp for rate-limiting
-  ipOrderLimits[ipAddress].push(Date.now());
-
-  // Increment session counter if pay at counter
-  if (paymentMethod === 'counter') {
-    sessionUnpaidCounterOrders[sessionId] = (sessionUnpaidCounterOrders[sessionId] || 0) + 1;
-  }
+  const zoneName = matchedZone ? matchedZone.name : null;
+  const { riskLevel, reason } = getSpamRisk(distance, ipAddress, sessionId, zoneName);
 
   const newOrder = {
-    id: 'ORD-' + Math.floor(100000 + Math.random() * 900000),
+    id: 'ORD-' + crypto.randomInt(100000, 1000000),
     customerName,
     phone,
-    notes: notes || "",
+    notes,
     items: enrichedItems,
     total: parseFloat(total.toFixed(2)),
     paymentMethod,
-    paymentStatus: paymentMethod === 'online' ? 'paid' : 'pending',
+    // Never taken from the request body. Staff confirm payment in the console,
+    // or the gateway webhook does once one is wired up.
+    paymentStatus: 'pending',
     status: 'pending',
     latitude: lat,
     longitude: lng,
     distance,
+    zoneName,
     spamRisk: riskLevel,
     riskReason: reason,
     ipAddress,
@@ -593,38 +864,47 @@ app.post('/api/orders', (req, res) => {
     createdAt: new Date().toISOString()
   };
 
-  orders.push(newOrder);
+  store.saveOrder(newOrder);
 
-  // Notify admin dashboard instantly via WebSocket
-  io.emit('new_order', newOrder);
+  // Staff-only channel: full record including phone, IP and coordinates.
+  io.to('admin').emit('new_order', newOrder);
 
   res.status(201).json({
     success: true,
     orderId: newOrder.id,
-    order: newOrder
+    order: customerView(newOrder)
   });
 });
 
 // 3. Track customer order status
 app.get('/api/orders/:id', (req, res) => {
-  const order = orders.find(o => o.id === req.params.id);
+  const order = store.getOrder(req.params.id);
   if (!order) {
     return res.status(404).json({ error: "Order not found" });
   }
-  res.json(order);
+  res.json(trackingView(order));
 });
 
 // 4. Admin fetch all orders
-app.get('/api/admin/orders', (req, res) => {
-  res.json(orders);
+app.get('/api/admin/orders', requireAdmin, (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit, 10) || 500, 2000);
+  res.json(store.listOrders(limit));
+});
+
+// 4b. Admin sales reporting, straight out of the order tables
+app.get('/api/admin/reports', requireAdmin, (req, res) => {
+  res.json({
+    salesByDay: store.salesByDay(30),
+    topDrinks: store.topDrinks(20)
+  });
 });
 
 // 5. Admin update status
-app.post('/api/admin/orders/:id/status', (req, res) => {
-  const { status } = req.body;
-  const order = orders.find(o => o.id === req.params.id);
+app.post('/api/admin/orders/:id/status', requireAdmin, (req, res) => {
+  const { status } = req.body || {};
+  const existing = store.getOrder(req.params.id);
 
-  if (!order) {
+  if (!existing) {
     return res.status(404).json({ error: "Order not found" });
   }
 
@@ -633,71 +913,104 @@ app.post('/api/admin/orders/:id/status', (req, res) => {
     return res.status(400).json({ error: "Invalid status" });
   }
 
-  order.status = status;
+  // Handing the drink over settles it. Cancelling leaves it unpaid, which the
+  // session's unpaid count already ignores for cancelled orders.
+  const paymentStatus = (status === 'completed' && existing.paymentStatus === 'pending')
+    ? 'paid'
+    : undefined;
 
-  // Auto-pay counter orders on completion
-  if (status === 'completed' && order.paymentMethod === 'counter') {
-    order.paymentStatus = 'paid';
-    if (sessionUnpaidCounterOrders[order.sessionId] > 0) {
-      sessionUnpaidCounterOrders[order.sessionId]--;
-    }
-  }
-
-  if (status === 'cancelled' && order.paymentMethod === 'counter') {
-    if (sessionUnpaidCounterOrders[order.sessionId] > 0) {
-      sessionUnpaidCounterOrders[order.sessionId]--;
-    }
-  }
-
-  // Notify all sockets about order updates
-  io.emit('order_status_update', {
-    id: order.id,
-    status: order.status,
-    paymentStatus: order.paymentStatus
-  });
-
+  const order = store.updateOrder(req.params.id, { status, paymentStatus });
+  broadcastOrderUpdate(order);
   res.json({ success: true, order });
 });
 
-// 6. Admin mark order as paid
-app.post('/api/admin/orders/:id/pay', (req, res) => {
-  const order = orders.find(o => o.id === req.params.id);
+// 6. Admin mark order as paid (staff confirmed cash / transfer received)
+app.post('/api/admin/orders/:id/pay', requireAdmin, (req, res) => {
+  const existing = store.getOrder(req.params.id);
 
-  if (!order) {
+  if (!existing) {
     return res.status(404).json({ error: "Order not found" });
   }
 
-  order.paymentStatus = 'paid';
-
-  if (order.paymentMethod === 'counter' && sessionUnpaidCounterOrders[order.sessionId] > 0) {
-    sessionUnpaidCounterOrders[order.sessionId]--;
-  }
-
-  // Broadcast update
-  io.emit('order_status_update', {
-    id: order.id,
-    paymentStatus: 'paid'
-  });
-
+  const order = store.updateOrder(req.params.id, { paymentStatus: 'paid' });
+  broadcastOrderUpdate(order);
   res.json({ success: true, order });
 });
 
-// Socket.io event handling
+// 7. Payment gateway webhook (stub).
+// Wire a real provider here: verify its signature, look the order up by the
+// provider's reference, and only then set paymentStatus. Until that exists the
+// endpoint stays disabled so nothing outside can mark an order paid.
+app.post('/api/payments/webhook', (req, res) => {
+  if (!PAYMENT_GATEWAY_ENABLED) {
+    return res.status(501).json({ error: 'No payment gateway is configured.' });
+  }
+  return res.status(501).json({ error: 'Gateway webhook handler not implemented yet.' });
+});
+
+function broadcastOrderUpdate(order) {
+  const payload = {
+    id: order.id,
+    status: order.status,
+    paymentStatus: order.paymentStatus
+  };
+  io.to('admin').emit('order_status_update', payload);
+  // Only the customer tracking this specific order hears about it.
+  io.to(`order:${order.id}`).emit('order_status_update', payload);
+}
+
+// -------------------------------------------------------------
+// Socket.io: admins are authenticated and isolated in their own room
+// -------------------------------------------------------------
+io.use((socket, next) => {
+  const token = socket.handshake.auth && socket.handshake.auth.adminToken;
+  socket.data.isAdmin = isValidAdminToken(token);
+  next();
+});
+
 io.on('connection', (socket) => {
-  console.log(`Socket admin client connected: ${socket.id}`);
+  if (socket.data.isAdmin) {
+    socket.join('admin');
+    console.log(`Admin client connected: ${socket.id}`);
+  }
 
   socket.emit('restaurant_info', {
     lat: RESTAURANT_LAT,
     lng: RESTAURANT_LNG
   });
 
+  // A customer subscribes to just their own order's updates.
+  socket.on('track_order', (orderId) => {
+    if (typeof orderId !== 'string' || !/^ORD-\d{6}$/.test(orderId)) return;
+    socket.rooms.forEach(room => {
+      if (room.startsWith('order:')) socket.leave(room);
+    });
+    socket.join(`order:${orderId}`);
+  });
+
   socket.on('disconnect', () => {
-    console.log(`Socket admin client disconnected: ${socket.id}`);
+    if (socket.data.isAdmin) console.log(`Admin client disconnected: ${socket.id}`);
   });
 });
 
+// -------------------------------------------------------------
 // Start the server
+// -------------------------------------------------------------
 server.listen(PORT, () => {
   console.log(`=== Tea/Coffee Order Server Running on http://localhost:${PORT} ===`);
-  console.log(`Restaurant location anchored at: Lat ${RESTAURANT_LAT}, Lng ${RESTAURANT_LNG}`);
+  console.log(`Shop location anchored at: Lat ${RESTAURANT_LAT}, Lng ${RESTAURANT_LNG}`);
+  console.log('Ordering zones:');
+  ORDER_ZONES.forEach(z => {
+    const counter = z.allowCounter ? 'counter allowed' : 'online only';
+    console.log(`  - ${z.name}: ${z.radiusKm} km radius, ${counter}`);
+  });
+  if (ADMIN_PASSWORD_IS_GENERATED) {
+    console.log('  ------------------------------------------------');
+    console.log(`   ADMIN PASSWORD (generated): ${ADMIN_PASSWORD}`);
+    console.log('   Set ADMIN_PASSWORD in the environment to fix it.');
+    console.log('  ------------------------------------------------');
+  }
+  if (!PAYMENT_GATEWAY_ENABLED) {
+    console.log('Payment gateway: DISABLED - all orders start unpaid and must be confirmed by staff.');
+  }
 });

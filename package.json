@@ -1,13 +1,14 @@
 {
-  "name": "restaurant-order-app",
+  "name": "otea-greyone-order-app",
   "version": "1.0.0",
-  "description": "Premium restaurant order app with geolocation anti-spam protection and real-time dashboard",
+  "description": "OTea x GreyOne order app - zone-based ordering, SQLite order store, and a real-time staff console",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node server.js"
+    "start": "node --env-file-if-exists=.env server.js",
+    "dev": "node --env-file-if-exists=.env server.js"
   },
   "dependencies": {
+    "better-sqlite3": "^13.0.3",
     "express": "^4.19.2",
     "socket.io": "^4.7.5"
   },

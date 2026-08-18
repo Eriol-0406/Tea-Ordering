@@ -7,7 +7,13 @@ let selectedPaymentMethod = null;
 let activeOrder = null;
 let mapInstance = null;
 let socket = null;
-let restaurantLocation = { lat: 1.352083, lng: 103.819836 }; // Anchored KL/Singapore
+// Placeholder only. The real coordinate arrives from /api/config before any
+// map is drawn - see the init sequence below.
+let restaurantLocation = { lat: 3.2158, lng: 101.7290 };
+
+// Crystal Boba is an add-on across the OTea tea range, not the GreyOne
+// coffee/matcha side. Keep this list in step with BOBA_CATEGORIES in server.js.
+const BOBA_CATEGORIES = ['Milk Tea', 'Fruit Tea', 'Pure Tea', 'Smoothie'];
 
 // Active modifier modal state
 let activeItemForCustomization = null;
@@ -16,12 +22,28 @@ let selectedIce = "Normal Ice";
 let selectedSugar = "Normal Sugar";
 let selectedTeaBase = null; // "Da Hong Pao (大红袍)" or "White Peach (白桃乌龙)"
 let selectedAddons = {
+  crystalBoba: false,
   extraEspresso: false,
   nikoNekoUpgrade: "none"
 };
 
 // QR countdown state
 let qrTimerInterval = null;
+
+// Server-provided runtime config (mock GPS visibility, gateway status).
+let appConfig = { enableMockGps: false, paymentGatewayEnabled: false };
+
+// Anything that originates from a person (their own name, notes, or menu text)
+// is escaped before it goes anywhere near innerHTML.
+function esc(value) {
+  if (value === null || value === undefined) return '';
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
 
 // Unique Session ID for session checks
 let sessionId = localStorage.getItem('luxe_session_id');
@@ -33,7 +55,12 @@ if (!sessionId) {
 // -------------------------------------------------------------
 // App Initialization
 // -------------------------------------------------------------
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+  // Config must land first: it carries the shop coordinate and the ordering
+  // zones. Restoring an active order before it arrives drew the tracking map
+  // around the placeholder location.
+  await fetchConfig();
+
   initSocket();
   fetchMenu();
   loadCartFromStorage();
@@ -42,6 +69,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
 function initSocket() {
   socket = io();
+
+  socket.on('connect', () => {
+    if (activeOrder) socket.emit('track_order', activeOrder.id);
+  });
 
   socket.on('restaurant_info', (info) => {
     restaurantLocation = info;
@@ -54,6 +85,23 @@ function initSocket() {
       updateTrackingUI();
     }
   });
+}
+
+async function fetchConfig() {
+  try {
+    const res = await fetch('/api/config');
+    appConfig = await res.json();
+    if (appConfig.restaurant) restaurantLocation = appConfig.restaurant;
+  } catch (err) {
+    console.warn('Could not load runtime config, using defaults.', err);
+  }
+  applyConfigToUi();
+}
+
+// The mock-GPS dropdown is a testing aid, not something customers should see.
+function applyConfigToUi() {
+  const mockPanel = document.querySelector('.mock-gps-selector');
+  if (mockPanel) mockPanel.style.display = appConfig.enableMockGps ? 'block' : 'none';
 }
 
 async function fetchMenu() {
@@ -86,7 +134,9 @@ function renderMenu(items) {
   menuGrid.innerHTML = items.map(item => {
     // Show starting price or single price
     const startingPrice = item.variants[0].price.toFixed(2);
-    const priceText = item.variants.length > 1 ? `from RM ${startingPrice}` : `RM ${startingPrice}`;
+    // "RM 12.00+" rather than "from RM 12.00" - the short form fits beside the
+    // 44px add button on a narrow phone card without overlapping it.
+    const priceText = item.variants.length > 1 ? `RM ${startingPrice}+` : `RM ${startingPrice}`;
     
     // Choose appropriate fallback emoji icon
     let icon = "🥤";
@@ -94,24 +144,25 @@ function renderMenu(items) {
     else if (item.category === "Pure Tea") icon = "🍵";
     else if (item.category === "Fruit Tea") icon = "🍊";
     else if (item.category === "Cold Brew") icon = "🧊";
+    else if (item.category === "Smoothie") icon = "🍧";
 
     // Image mapping logic
     const imageTag = item.image 
-      ? `<img class="menu-image" src="${item.image}" alt="${item.name}">`
+      ? `<img class="menu-image" src="${esc(item.image)}" alt="${esc(item.name)}" loading="lazy" decoding="async">`
       : `<div class="drink-fallback-icon">${icon}</div>`;
 
     const tagTag = item.image 
       ? '' 
-      : `<span class="menu-tag" style="position: absolute; top: 8px; left: 8px; background: rgba(0,0,0,0.65); padding: 2px 8px; border-radius: 4px; font-size: 0.7rem; color: var(--text-secondary);">${item.category}</span>`;
+      : `<span class="menu-tag" style="position: absolute; top: 8px; left: 8px; background: rgba(0,0,0,0.65); padding: 2px 8px; border-radius: 4px; font-size: 0.7rem; color: var(--text-secondary);">${esc(item.category)}</span>`;
 
     return `
-      <div class="menu-card glass-panel" data-category="${item.category}">
+      <div class="menu-card glass-panel" data-category="${esc(item.category)}">
         <div class="menu-image-container">
           ${imageTag}
           ${tagTag}
         </div>
         <div class="menu-content">
-          <h3 class="menu-title">${item.name}</h3>
+          <h3 class="menu-title">${esc(item.name)}</h3>
           <div class="menu-price-row">
             <span class="menu-price">${priceText}</span>
             <button class="add-btn-round" onclick="openModifiersModal(${item.id})">+</button>
@@ -162,6 +213,7 @@ function openModifiersModal(itemId) {
   selectedIce = "Normal Ice";
   selectedSugar = "Normal Sugar";
   selectedAddons = {
+    crystalBoba: false,
     extraEspresso: false,
     nikoNekoUpgrade: "none"
   };
@@ -188,6 +240,20 @@ function openModifiersModal(itemId) {
   // Reset active classes on standard options
   resetModifierPillSelection('modIceSection', 'Normal Ice', 'ice');
   resetModifierPillSelection('modSugarSection', 'Normal Sugar', 'sugar');
+
+  // Smoothies are blended - an ice level would be meaningless on the ticket.
+  const iceSection = document.getElementById('modIceSection');
+  const isBlended = item.category === 'Smoothie';
+  iceSection.style.display = isBlended ? 'none' : 'flex';
+  if (isBlended) selectedIce = 'Blended';
+
+  const bobaSection = document.getElementById('modBobaAddonSection');
+  if (BOBA_CATEGORIES.includes(item.category)) {
+    bobaSection.style.display = 'block';
+    document.getElementById('addonCrystalBoba').classList.remove('active');
+  } else {
+    bobaSection.style.display = 'none';
+  }
 
   if (item.category === "Coffee") {
     coffeeSection.style.display = 'block';
@@ -265,6 +331,12 @@ function selectTeaBase(el) {
 }
 
 function toggleAddon(type) {
+  if (type === 'crystalBoba') {
+    selectedAddons.crystalBoba = !selectedAddons.crystalBoba;
+    document.getElementById('addonCrystalBoba')
+      .classList.toggle('active', selectedAddons.crystalBoba);
+  }
+
   if (type === 'extraEspresso') {
     selectedAddons.extraEspresso = !selectedAddons.extraEspresso;
     const row = document.getElementById('addonExtraEspresso');
@@ -306,6 +378,10 @@ function updateModifiersPriceTally() {
   const basePrice = activeItemForCustomization.variants[selectedVariantIndex].price;
   let addonCharge = 0;
 
+  if (BOBA_CATEGORIES.includes(activeItemForCustomization.category) && selectedAddons.crystalBoba) {
+    addonCharge += 2.00;
+  }
+
   if (activeItemForCustomization.category === 'Coffee' && selectedAddons.extraEspresso) {
     addonCharge += 2.50;
   }
@@ -330,7 +406,7 @@ function confirmAddToCart() {
   const variant = item.variants[selectedVariantIndex];
 
   // Hash key representation (includes selectedTeaBase to distinguish options)
-  const hashUid = `${item.id}-${selectedVariantIndex}-${selectedIce.replace(/\s+/g, '')}-${selectedSugar.replace(/\s+/g, '')}-${selectedAddons.extraEspresso}-${selectedAddons.nikoNekoUpgrade}-${selectedTeaBase || 'none'}`;
+  const hashUid = `${item.id}-${selectedVariantIndex}-${selectedIce.replace(/\s+/g, '')}-${selectedSugar.replace(/\s+/g, '')}-${selectedAddons.crystalBoba}-${selectedAddons.extraEspresso}-${selectedAddons.nikoNekoUpgrade}-${selectedTeaBase || 'none'}`;
 
   // Check if identical item configuration exists
   const existing = cart.find(c => c.uid === hashUid);
@@ -442,6 +518,10 @@ function renderCartDrawer() {
     let unitPrice = variant.price;
     let addonsTextList = [];
 
+    if (BOBA_CATEGORIES.includes(item.category) && cartItem.addons.crystalBoba) {
+      unitPrice += 2.00;
+      addonsTextList.push("Crystal Boba (+RM2.00)");
+    }
     if (item.category === 'Coffee' && cartItem.addons.extraEspresso) {
       unitPrice += 2.50;
       addonsTextList.push("Extra Espresso Shot (+RM2.50)");
@@ -467,8 +547,8 @@ function renderCartDrawer() {
     return `
       <div class="cart-item">
         <div class="cart-item-info">
-          <div class="cart-item-name">${item.name}</div>
-          <div class="cart-item-options">${optionsText}</div>
+          <div class="cart-item-name">${esc(item.name)}</div>
+          <div class="cart-item-options">${esc(optionsText)}</div>
           <div class="cart-item-price">RM ${itemTotal.toFixed(2)} <span style="font-size:0.7rem; color:var(--text-muted); font-weight:400;">(RM ${unitPrice.toFixed(2)} ea)</span></div>
           <div class="cart-item-controls">
             <button class="qty-btn" onclick="updateCartQty('${cartItem.uid}', -1)">-</button>
@@ -583,49 +663,57 @@ function handleMockGpsChange() {
     return;
   }
 
-  const icon = document.getElementById('locationStatusIcon');
-  const title = document.getElementById('locationStatusTitle');
-  const text = document.getElementById('locationStatusText');
-  const coordsDiv = document.getElementById('locationCoords');
-  const nextBtn = document.getElementById('locationNextBtn');
-  nextBtn.disabled = false;
-
-  if (mockVal === 'near') {
-    userLocation = { lat: 1.357083, lng: 103.824836 }; // 0.79 km
-    icon.className = 'location-icon-status success';
-    icon.innerText = '✅';
-    title.innerText = 'Proximity Verified';
-    text.innerText = 'You are within 0.79 km from the shop. Pay at Counter is unlocked.';
-    coordsDiv.style.display = 'block';
-    document.getElementById('coordLat').innerText = userLocation.lat.toFixed(5);
-    document.getElementById('coordLng').innerText = userLocation.lng.toFixed(5);
-    enablePaymentCounter(true);
-  } 
-  else if (mockVal === 'medium') {
-    userLocation = { lat: 1.422083, lng: 103.899836 }; // 11.8 km
-    icon.className = 'location-icon-status success';
-    icon.innerText = '⚠️';
-    title.innerText = 'Proximity Token Warning';
-    text.innerText = 'You are 11.8 km away. Pay at Counter is locked (max 10 km). Prepay online is required.';
-    coordsDiv.style.display = 'block';
-    document.getElementById('coordLat').innerText = userLocation.lat.toFixed(5);
-    document.getElementById('coordLng').innerText = userLocation.lng.toFixed(5);
-    enablePaymentCounter(false);
-  }
-  else if (mockVal === 'far') {
-    userLocation = { lat: 1.752083, lng: 104.219836 }; // 62.8 km
-    icon.className = 'location-icon-status denied';
-    icon.innerText = '❌';
-    title.innerText = 'Store Outside Bounds';
-    text.innerText = 'You are 62.8 km away. Ordering is restricted beyond 25 km perimeter.';
-    coordsDiv.style.display = 'block';
-    document.getElementById('coordLat').innerText = userLocation.lat.toFixed(5);
-    document.getElementById('coordLng').innerText = userLocation.lng.toFixed(5);
-    nextBtn.disabled = true;
-  }
-  else if (mockVal === 'deny') {
+  if (mockVal === 'deny') {
     handleLocationDenied();
+    return;
   }
+
+  // Mock points are derived from the live zone config rather than hardcoded, so
+  // they stay correct when the shop or hub coordinates change.
+  const zones = appConfig.zones || [];
+  const shop = zones.find(z => z.isShop) || zones[0];
+  const point = mockGpsPoint(mockVal, zones, shop);
+
+  if (!point) {
+    alert('That test location needs its coordinates set in config/zones.json first.');
+    document.getElementById('mockGps').value = 'actual';
+    return;
+  }
+
+  handleLocationSuccess(point.lat, point.lng);
+}
+
+function mockGpsPoint(preset, zones, shop) {
+  if (!shop) return null;
+
+  if (preset === 'shop') {
+    return { lat: shop.lat, lng: shop.lng };
+  }
+  if (preset === 'hub') {
+    const hub = zones.find(z => !z.isShop);
+    return hub ? { lat: hub.lat, lng: hub.lng } : null;
+  }
+  // Roughly 0.09 degrees of latitude is ~10 km: far enough to sit outside every
+  // zone but inside the service radius.
+  if (preset === 'outside') {
+    return { lat: shop.lat + 0.09, lng: shop.lng };
+  }
+  if (preset === 'far') {
+    return { lat: shop.lat + 0.5, lng: shop.lng + 0.3 };
+  }
+  return null;
+}
+
+// Online payment only relaxes the proximity rules once a gateway actually
+// confirms funds. While it does not, the client must mirror the server: an
+// unverified location means no order at all, whichever method is picked.
+function onlineCanBypassProximity() {
+  return !!appConfig.paymentGatewayEnabled;
+}
+
+function setRetryVisible(visible) {
+  const btn = document.getElementById('locationRetryBtn');
+  if (btn) btn.style.display = visible ? 'inline-flex' : 'none';
 }
 
 function handleLocationSuccess(lat, lng) {
@@ -642,25 +730,51 @@ function handleLocationSuccess(lat, lng) {
   document.getElementById('coordLng').innerText = lng.toFixed(5);
   nextBtn.disabled = false;
 
-  if (d <= 10.0) {
+  setRetryVisible(false);
+
+  const match = findZone(lat, lng);
+
+  if (match) {
     icon.className = 'location-icon-status success';
     icon.innerText = '✅';
-    title.innerText = 'Proximity Verified';
-    text.innerText = `You are ${d} km from the store. Pay at Counter is unlocked.`;
-    enablePaymentCounter(true);
-  } else if (d <= 25.0) {
+    title.innerText = `Verified at ${match.zone.name}`;
+    text.innerText = match.zone.allowCounter
+      ? `You are inside ${match.zone.name}. Pay at Counter is unlocked.`
+      : `You are inside ${match.zone.name}. This spot is online-payment only.`;
+    enablePaymentCounter(!!match.zone.allowCounter);
+  } else if (onlineCanBypassProximity() && d <= (appConfig.maxServiceRadiusKm || 25)) {
     icon.className = 'location-icon-status success';
     icon.innerText = '⚠️';
-    title.innerText = 'Proximity Warning';
-    text.innerText = `You are ${d} km away. Pay at Counter is restricted beyond 10 km. Please prepay online.`;
+    title.innerText = 'Outside Pickup Zones';
+    text.innerText = `You are ${d} km from the shop. Pay at Counter is unavailable here - please prepay online.`;
     enablePaymentCounter(false);
   } else {
     icon.className = 'location-icon-status denied';
     icon.innerText = '❌';
-    title.innerText = 'Outside Ordering Bounds';
-    text.innerText = `You are ${d} km away, which exceeds our 25 km perimeter.`;
+    title.innerText = 'Outside Ordering Zones';
+    text.innerText = `You are ${d} km from the shop. Ordering is available at ${zoneNames()}.`;
     nextBtn.disabled = true;
+    enablePaymentCounter(false);
   }
+}
+
+// Mirrors resolveZone() on the server: nearest zone whose radius contains us.
+function findZone(lat, lng) {
+  let best = null;
+  for (const zone of (appConfig.zones || [])) {
+    const d = calculateDistanceLocal(zone.lat, zone.lng, lat, lng);
+    if (d <= zone.radiusKm && (!best || d < best.distance)) {
+      best = { zone, distance: d };
+    }
+  }
+  return best;
+}
+
+function zoneNames() {
+  const names = (appConfig.zones || []).map(z => z.name);
+  if (!names.length) return 'our shop';
+  if (names.length === 1) return names[0];
+  return names.slice(0, -1).join(', ') + ' or ' + names[names.length - 1];
 }
 
 function handleLocationDenied() {
@@ -674,10 +788,18 @@ function handleLocationDenied() {
   coordsDiv.style.display = 'none';
   icon.className = 'location-icon-status denied';
   icon.innerText = '🔒';
-  title.innerText = 'GPS Restricted';
-  text.innerText = 'GPS coordinates unavailable. For security, Pay at Counter is disabled. You must pre-pay online.';
-  nextBtn.disabled = false;
   enablePaymentCounter(false);
+  setRetryVisible(true);
+
+  if (onlineCanBypassProximity()) {
+    title.innerText = 'GPS Restricted';
+    text.innerText = 'GPS coordinates unavailable. Pay at Counter is disabled - you must pre-pay online.';
+    nextBtn.disabled = false;
+  } else {
+    title.innerText = 'Location Required';
+    text.innerText = 'We could not read your location. Please allow location access in your browser and retry - orders cannot be accepted without it.';
+    nextBtn.disabled = true;
+  }
 }
 
 function calculateDistanceLocal(lat1, lon1, lat2, lon2) {
@@ -812,13 +934,14 @@ function clearQrTimer() {
 
 function simulateQrPaymentSuccess() {
   clearQrTimer();
-  
+
   // Show submit button temporarily and click it
   const submitBtn = document.getElementById('submitOrderBtn');
   submitBtn.style.display = 'inline-flex';
-  
-  // Pulse green overlay animation
-  alert("Payment Successful! Finalizing order...");
+
+  // No gateway is wired up yet, so this only submits the order. It stays
+  // unpaid until staff confirm the transfer landed in the console.
+  alert("Transfer submitted. Your order goes to the counter now and staff will confirm payment.");
   submitFinalOrder();
 }
 
@@ -922,13 +1045,15 @@ async function pollOrderStatus() {
   try {
     const res = await fetch(`/api/orders/${activeOrder.id}`);
     if (res.ok) {
-      activeOrder = await res.json();
+      Object.assign(activeOrder, await res.json());
+      sessionStorage.setItem('luxe_active_order', JSON.stringify(activeOrder));
       updateTrackingUI();
     }
   } catch (err) {}
 }
 
 function showTrackingView() {
+  if (socket && activeOrder) socket.emit('track_order', activeOrder.id);
   switchTab('status');
 }
 
@@ -954,7 +1079,7 @@ function updateTrackingUI() {
     desc.innerText = "Your fresh drink is waiting at the counter. Grab it now!";
   } else if (activeOrder.status === 'completed') {
     heading.innerText = "Collected";
-    desc.innerText = "Enjoy your fresh Luxe drink! See you again soon.";
+    desc.innerText = "Enjoy your drink! See you again soon.";
   } else if (activeOrder.status === 'cancelled') {
     heading.innerText = "Queue Ticket Cancelled";
     desc.innerText = "This ticket was cancelled or flagged as spam/unresponsive.";
@@ -983,22 +1108,22 @@ function updateTrackingUI() {
 
   const itemsContainer = document.getElementById('trackReceiptItems');
   itemsContainer.innerHTML = activeOrder.items.map(item => {
-    const addonLabel = item.addonsText ? `<br><span style="font-size:0.75rem; color:var(--text-muted);">➕ ${item.addonsText}</span>` : '';
+    const addonLabel = item.addonsText ? `<br><span style="font-size:0.75rem; color:var(--text-muted);">➕ ${esc(item.addonsText)}</span>` : '';
     const baseLabel = item.teaBase ? ` [${item.teaBase}]` : '';
     return `
       <div class="receipt-row" style="flex-direction:column; align-items:flex-start; gap:0.15rem;">
         <div style="display:flex; justify-content:space-between; width:100%; font-weight:500;">
-          <span>${item.name} <strong style="color:var(--text-muted);">x${item.quantity}</strong></span>
+          <span>${esc(item.name)} <strong style="color:var(--text-muted);">x${esc(item.quantity)}</strong></span>
           <span>RM ${(item.price * item.quantity).toFixed(2)}</span>
         </div>
-        <span style="font-size:0.75rem; color:var(--text-secondary);">Modifiers: ${item.variantName}${baseLabel} | ${item.ice} | ${item.sugar}</span>
+        <span style="font-size:0.75rem; color:var(--text-secondary);">Modifiers: ${esc(item.variantName)}${esc(baseLabel)} | ${esc(item.ice)} | ${esc(item.sugar)}</span>
         ${addonLabel}
       </div>
     `;
   }).join('');
 
-  document.getElementById('trackReceiptPayment').innerText = 
-    activeOrder.paymentMethod === 'online' ? 'Paid Securely Online (QR)' : 'Pay at Counter';
+  document.getElementById('trackReceiptPayment').innerText =
+    activeOrder.paymentMethod === 'online' ? 'Online Transfer (QR)' : 'Pay at Counter';
   
   const payStatusLabel = document.getElementById('trackReceiptPaymentStatus');
   payStatusLabel.innerText = activeOrder.paymentStatus.toUpperCase();
@@ -1038,7 +1163,7 @@ function initTrackingMap() {
     })
   })
   .addTo(mapInstance)
-  .bindPopup("<strong>Luxe Bar Kitchen</strong>")
+  .bindPopup("<strong>Our Shop</strong>")
   .openPopup();
 
   if (activeOrder.latitude && activeOrder.longitude) {
@@ -1059,7 +1184,7 @@ function initTrackingMap() {
     ];
     
     L.polyline(pathPoints, {
-      color: '#f59e0b',
+      color: getComputedStyle(document.documentElement).getPropertyValue('--accent-color').trim() || '#7fa9f0',
       weight: 1.8,
       dashArray: '5, 8',
       opacity: 0.7
@@ -1070,6 +1195,11 @@ function initTrackingMap() {
   } else {
     mapInstance.setView([restaurantLocation.lat, restaurantLocation.lng], 15);
   }
+
+  // Leaflet measures the container on creation. If the tracking panel was still
+  // hidden at that moment it measures zero and renders a blank box, so re-measure
+  // once the panel has been laid out.
+  setTimeout(() => mapInstance && mapInstance.invalidateSize(), 150);
 }
 
 function resetToMenu() {

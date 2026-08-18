@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Luxe Drinks - Admin Order and Spam Proximity Management Panel">
-  <title>Luxe Drinks - Admin Panel</title>
+  <meta name="description" content="OTea x GreyOne - Staff order and proximity management console">
+  <title>OTea x GreyOne - Admin</title>
   
   <!-- Leaflet CSS for maps -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
@@ -13,10 +13,31 @@
 </head>
 <body class="admin-body">
 
+  <!-- Sign-in gate: the workspace stays hidden until a token is issued -->
+  <div id="adminLoginGate" class="admin-login-gate" style="display:none;">
+    <div class="glass-panel admin-login-card">
+      <h1 style="font-size:1.3rem; margin-bottom:0.25rem;">⚙️ OTea x GreyOne</h1>
+      <p style="font-size:0.85rem; color:var(--text-secondary); margin-bottom:1.25rem;">
+        Staff sign-in required to view the order console.
+      </p>
+      <form id="adminLoginForm">
+        <label for="adminPasswordInput" style="font-size:0.8rem; color:var(--text-secondary);">Staff password</label>
+        <input type="password" id="adminPasswordInput" class="input-field" autocomplete="current-password"
+               required style="width:100%; margin:0.4rem 0 0.9rem 0;">
+        <button type="submit" id="adminLoginBtn" class="btn btn-primary" style="width:100%;">Sign In</button>
+      </form>
+      <div id="adminLoginError" class="admin-login-error" style="display:none;"></div>
+    </div>
+  </div>
+
+  <!-- Authenticated workspace -->
+  <div id="adminWorkspace" style="display:none;">
+
+
   <!-- Admin Sidebar Navigation -->
   <aside class="admin-sidebar">
     <div class="admin-logo">
-      <h1><span>⚙️</span> LUXE ADMIN</h1>
+      <h1><span>⚙️</span> OTea x GreyOne</h1>
     </div>
     
     <nav class="admin-nav">
@@ -35,6 +56,7 @@
     <div style="margin-top: auto; padding-top: 1rem; border-top: 1px solid var(--panel-border); font-size: 0.75rem; color: var(--text-muted);">
       Socket Link: <span id="socketStatus" style="color: var(--danger); font-weight: 700;">OFFLINE</span><br>
       Version: 1.0.0 (Beta)
+      <button class="btn btn-secondary" onclick="signOut()" style="width:100%; margin-top:0.75rem; padding:0.4rem; font-size:0.75rem;">Sign Out</button>
     </div>
   </aside>
 
@@ -125,6 +147,8 @@
     </div>
 
   </main>
+
+  </div>
 
   <!-- Socket.io Script and Leaflet.js Scripts -->
   <script src="/socket.io/socket.io.js"></script>

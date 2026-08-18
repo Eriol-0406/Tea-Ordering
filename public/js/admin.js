@@ -3,19 +3,121 @@ let orders = [];
 let socket = null;
 let mapInstance = null;
 let mapMarkers = {};
-let restaurantLocation = { lat: 1.352083, lng: 103.819836 }; // Anchored KL/Singapore
+let restaurantLocation = { lat: 3.2158, lng: 101.7290 }; // replaced by restaurant_info on connect
+
+// Staff session token, issued by POST /api/admin/login.
+let adminToken = sessionStorage.getItem('luxe_admin_token');
+
+// -------------------------------------------------------------
+// Escaping: order fields are typed by customers, so nothing from an
+// order may ever be dropped into innerHTML unescaped.
+// -------------------------------------------------------------
+function esc(value) {
+  if (value === null || value === undefined) return '';
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
 
 // -------------------------------------------------------------
 // Admin Initialization
 // -------------------------------------------------------------
 document.addEventListener('DOMContentLoaded', () => {
-  initMap();
-  initSocket();
-  fetchAllOrders();
+  document.getElementById('adminLoginForm').addEventListener('submit', handleLogin);
+
+  if (adminToken) {
+    startConsole();
+  } else {
+    showLoginGate();
+  }
 });
 
+function showLoginGate(message) {
+  document.getElementById('adminLoginGate').style.display = 'flex';
+  document.getElementById('adminWorkspace').style.display = 'none';
+  const errorBox = document.getElementById('adminLoginError');
+  if (message) {
+    errorBox.innerText = message;
+    errorBox.style.display = 'block';
+  } else {
+    errorBox.style.display = 'none';
+  }
+}
+
+async function handleLogin(event) {
+  event.preventDefault();
+  const input = document.getElementById('adminPasswordInput');
+  const button = document.getElementById('adminLoginBtn');
+  button.disabled = true;
+  button.innerText = 'Checking...';
+
+  try {
+    const res = await fetch('/api/admin/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: input.value })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Sign-in failed');
+
+    adminToken = data.token;
+    sessionStorage.setItem('luxe_admin_token', adminToken);
+    input.value = '';
+    startConsole();
+  } catch (err) {
+    showLoginGate(err.message);
+  } finally {
+    button.disabled = false;
+    button.innerText = 'Sign In';
+  }
+}
+
+function startConsole() {
+  document.getElementById('adminLoginGate').style.display = 'none';
+  document.getElementById('adminWorkspace').style.display = 'flex';
+
+  if (!mapInstance) initMap();
+  if (!socket) initSocket();
+  fetchAllOrders();
+}
+
+function signOut() {
+  fetch('/api/admin/logout', { method: 'POST', headers: authHeaders() }).catch(() => {});
+  clearSession('Signed out.');
+}
+
+function clearSession(message) {
+  adminToken = null;
+  sessionStorage.removeItem('luxe_admin_token');
+  if (socket) {
+    socket.disconnect();
+    socket = null;
+  }
+  showLoginGate(message);
+}
+
+function authHeaders(extra) {
+  return Object.assign({ 'Authorization': `Bearer ${adminToken}` }, extra || {});
+}
+
+// Any 401 means the token expired or was revoked; drop straight back to the gate.
+async function adminFetch(url, options) {
+  const opts = options || {};
+  opts.headers = authHeaders(opts.headers);
+  const res = await fetch(url, opts);
+  if (res.status === 401) {
+    clearSession('Session expired. Please sign in again.');
+    throw new Error('Session expired');
+  }
+  return res;
+}
+
 function initSocket() {
-  socket = io();
+  // The handshake token is what puts this socket in the staff-only room.
+  socket = io({ auth: { adminToken } });
 
   const statusLabel = document.getElementById('socketStatus');
 
@@ -42,7 +144,7 @@ function initSocket() {
         })
       })
       .addTo(mapInstance)
-      .bindPopup("<strong>Luxe Drinks Kitchen</strong>")
+      .bindPopup("<strong>OTea x GreyOne</strong>")
       .openPopup();
     }
   });
@@ -93,7 +195,7 @@ function playNotificationSound() {
 
 async function fetchAllOrders() {
   try {
-    const res = await fetch('/api/admin/orders');
+    const res = await adminFetch('/api/admin/orders');
     orders = await res.json();
     
     orders.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
@@ -123,7 +225,7 @@ function renderOrdersQueue() {
   if (!filteredOrders.length) {
     queueContainer.innerHTML = `
       <div style="text-align: center; color: var(--text-secondary); padding: 4rem;">
-        No active tickets matching: "${filter.toUpperCase()}"
+        No active tickets matching: "${esc(filter.toUpperCase())}"
       </div>
     `;
     return;
@@ -135,60 +237,62 @@ function renderOrdersQueue() {
     let actionButtons = '';
     if (order.status === 'pending') {
       actionButtons = `
-        <button class="btn btn-primary" onclick="changeStatus('${order.id}', 'preparing')">Accept & Brew</button>
-        <button class="btn btn-danger" onclick="changeStatus('${order.id}', 'cancelled')">Cancel/Spam</button>
+        <button class="btn btn-primary" onclick="changeStatus('${esc(order.id)}', 'preparing')">Accept & Brew</button>
+        <button class="btn btn-danger" onclick="changeStatus('${esc(order.id)}', 'cancelled')">Cancel/Spam</button>
       `;
     } else if (order.status === 'preparing') {
       actionButtons = `
-        <button class="btn btn-success" onclick="changeStatus('${order.id}', 'ready')">Mark Ready</button>
-        <button class="btn btn-danger" onclick="changeStatus('${order.id}', 'cancelled')">Cancel</button>
+        <button class="btn btn-success" onclick="changeStatus('${esc(order.id)}', 'ready')">Mark Ready</button>
+        <button class="btn btn-danger" onclick="changeStatus('${esc(order.id)}', 'cancelled')">Cancel</button>
       `;
     } else if (order.status === 'ready') {
-      const payButton = (order.paymentMethod === 'counter' && order.paymentStatus === 'pending')
-        ? `<button class="btn btn-success" onclick="markAsPaid('${order.id}')">💵 Paid</button>`
+      // Online orders are pending too until staff confirm the transfer landed.
+      const payButton = (order.paymentStatus === 'pending')
+        ? `<button class="btn btn-success" onclick="markAsPaid('${esc(order.id)}')">💵 Paid</button>`
         : '';
       actionButtons = `
         ${payButton}
-        <button class="btn btn-primary" onclick="changeStatus('${order.id}', 'completed')">Collected</button>
+        <button class="btn btn-primary" onclick="changeStatus('${esc(order.id)}', 'completed')">Collected</button>
       `;
     }
 
     const riskClass = order.spamRisk.toLowerCase().replace(/\s+/g, '-');
     const distanceText = order.distance !== null ? `${order.distance} km` : 'Blocked Location';
-    const hasNote = order.notes ? `<div style="font-size:0.75rem; color: var(--text-muted); margin-top:0.25rem;">📝 Notes: ${order.notes}</div>` : '';
+    const hasNote = order.notes ? `<div style="font-size:0.75rem; color: var(--text-muted); margin-top:0.25rem;">📝 Notes: ${esc(order.notes)}</div>` : '';
 
     return `
-      <div class="admin-order-card" id="card-${order.id}">
+      <div class="admin-order-card" id="card-${esc(order.id)}">
         <div class="order-card-header">
           <div>
-            <span class="order-card-id">${order.id}</span>
+            <span class="order-card-id">${esc(order.id)}</span>
             <span style="font-size:0.8rem; color: var(--text-muted); margin-left: 0.5rem;">${time}</span>
           </div>
-          <span class="spam-risk-badge ${riskClass}">${order.spamRisk}</span>
+          <span class="spam-risk-badge ${esc(riskClass)}">${esc(order.spamRisk)}</span>
         </div>
 
         <div class="order-card-meta">
-          <div class="meta-item">👤 <strong>${order.customerName}</strong></div>
-          <div class="meta-item">📞 ${order.phone}</div>
-          <div class="meta-item">📍 Proximity: ${distanceText}</div>
-          <div class="meta-item">💻 IP: ${order.ipAddress}</div>
+          <div class="meta-item">👤 <strong>${esc(order.customerName)}</strong></div>
+          <div class="meta-item">📞 ${esc(order.phone)}</div>
+          <div class="meta-item">📍 Proximity: ${esc(distanceText)}</div>
+          <div class="meta-item">🏷️ Zone: ${esc(order.zoneName || 'Outside zones')}</div>
+          <div class="meta-item">💻 IP: ${esc(order.ipAddress)}</div>
         </div>
 
         <!-- Customizable drink lists formatted for the kitchen -->
         <div class="order-card-items-list" style="display:flex; flex-direction:column; gap:0.5rem;">
           ${order.items.map(item => {
             const addonLabel = item.addonsText 
-              ? `<div style="font-size:0.75rem; color: var(--accent-color); margin-top:0.1rem;">➕ Upgrades: ${item.addonsText}</div>` 
+              ? `<div style="font-size:0.75rem; color: var(--accent-color); margin-top:0.1rem;">➕ Upgrades: ${esc(item.addonsText)}</div>` 
               : '';
             const baseLabel = item.teaBase ? ` [${item.teaBase}]` : '';
             return `
               <div class="admin-order-item-row" style="flex-direction:column; align-items:flex-start; border-bottom: 1px dashed rgba(255,255,255,0.04); padding-bottom: 0.4rem; margin-bottom: 0.2rem;">
                 <div style="display:flex; justify-content:space-between; width:100%; font-weight:600;">
-                  <span>${item.name} <strong style="color:var(--accent-color);">x${item.quantity}</strong></span>
+                  <span>${esc(item.name)} <strong style="color:var(--accent-color);">x${item.quantity}</strong></span>
                   <span>RM ${(item.price * item.quantity).toFixed(2)}</span>
                 </div>
                 <div style="font-size:0.75rem; color:var(--text-secondary); margin-top:0.1rem;">
-                  Options: ${item.variantName}${baseLabel} | ${item.ice} | ${item.sugar}
+                  Options: ${esc(item.variantName)}${esc(baseLabel)} | ${esc(item.ice)} | ${esc(item.sugar)}
                 </div>
                 ${addonLabel}
               </div>
@@ -198,8 +302,8 @@ function renderOrdersQueue() {
 
         <div class="order-card-total-row">
           <div style="font-size: 0.8rem; color: var(--text-secondary);">
-            Payment: <strong style="color:var(--accent-color);">${order.paymentMethod.toUpperCase()}</strong> 
-            (<span style="color:${order.paymentStatus === 'paid' ? 'var(--success)' : 'var(--warning)'};">${order.paymentStatus.toUpperCase()}</span>)
+            Payment: <strong style="color:var(--accent-color);">${esc(order.paymentMethod.toUpperCase())}</strong> 
+            (<span style="color:${order.paymentStatus === 'paid' ? 'var(--success)' : 'var(--warning)'};">${esc(order.paymentStatus.toUpperCase())}</span>)
           </div>
           <div style="font-size: 1.1rem; color: var(--accent-color);">RM ${order.total.toFixed(2)}</div>
         </div>
@@ -207,7 +311,7 @@ function renderOrdersQueue() {
         ${hasNote}
         
         <div style="font-size:0.75rem; color: var(--danger); padding-top:0.25rem; border-top:1px dashed rgba(255,255,255,0.05);">
-          🛡️ Proximity Audit: ${order.riskReason}
+          🛡️ Proximity Audit: ${esc(order.riskReason)}
         </div>
 
         <div class="order-card-actions">
@@ -227,7 +331,7 @@ function filterOrders() {
 // -------------------------------------------------------------
 async function changeStatus(id, newStatus) {
   try {
-    const res = await fetch(`/api/admin/orders/${id}/status`, {
+    const res = await adminFetch(`/api/admin/orders/${id}/status`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
@@ -252,7 +356,7 @@ async function changeStatus(id, newStatus) {
 
 async function markAsPaid(id) {
   try {
-    const res = await fetch(`/api/admin/orders/${id}/pay`, {
+    const res = await adminFetch(`/api/admin/orders/${id}/pay`, {
       method: 'POST'
     });
 
@@ -335,7 +439,7 @@ function initMap() {
     })
   })
   .addTo(mapInstance)
-  .bindPopup("<strong>Luxe Drinks Kitchen</strong>")
+  .bindPopup("<strong>OTea x GreyOne</strong>")
   .openPopup();
 }
 
@@ -396,14 +500,15 @@ function updateOrderMarkerPopup(order) {
 
   const content = `
     <div style="font-family: var(--font-body); color: #000; min-width: 150px;">
-      <h4 style="margin:0 0 0.25rem 0;">${order.id}</h4>
+      <h4 style="margin:0 0 0.25rem 0;">${esc(order.id)}</h4>
       <p style="margin:0 0 0.5rem 0; font-size: 0.8rem;">
-        Customer: <strong>${order.customerName}</strong><br>
-        Distance: ${order.distance} km<br>
-        Risk: <strong>${order.spamRisk}</strong><br>
-        Status: <strong style="text-transform: uppercase;">${order.status}</strong>
+        Customer: <strong>${esc(order.customerName)}</strong><br>
+        Zone: ${esc(order.zoneName || 'Outside zones')}<br>
+        Distance: ${esc(order.distance)} km<br>
+        Risk: <strong>${esc(order.spamRisk)}</strong><br>
+        Status: <strong style="text-transform: uppercase;">${esc(order.status)}</strong>
       </p>
-      <button style="width:100%; border:none; background:var(--accent-color); color:#000; font-weight:600; padding:0.25rem; border-radius:4px; cursor:pointer;" onclick="focusOrderCard('${order.id}')">
+      <button style="width:100%; border:none; background:var(--accent-color); color:#000; font-weight:600; padding:0.25rem; border-radius:4px; cursor:pointer;" onclick="focusOrderCard('${esc(order.id)}')">
         Focus Card
       </button>
     </div>

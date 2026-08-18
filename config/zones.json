@@ -1,0 +1,24 @@
+{
+  "_comment": "Ordering is accepted only from inside one of these zones. allowCounter decides whether Pay at Counter is offered there. To get exact coordinates: open Google Maps, right-click the spot, and click the lat/lng pair at the top of the menu to copy it.",
+  "maxServiceRadiusKm": 25,
+  "zones": [
+    {
+      "name": "Arena TARUMT",
+      "isShop": true,
+      "lat": 3.2158,
+      "lng": 101.729,
+      "radiusKm": 1.5,
+      "allowCounter": true,
+      "note": "APPROXIMATE - campus centre for TAR UMT Setapak. Replace with the exact Arena coordinate before launch."
+    },
+    {
+      "name": "CCACC Innovation Hub",
+      "isShop": false,
+      "lat": 3.0899417,
+      "lng": 101.6731656,
+      "radiusKm": 1,
+      "allowCounter": true,
+      "note": "D-30-01 Millerz Square (Megan Legasi), 357 Jln Klang Lama, 58000 KL. Coordinate from OpenStreetMap - verify against Google Maps if pins look off."
+    }
+  ]
+}
