@@ -1,12 +1,9 @@
 const express = require('express');
-const http = require('http');
-const socketIo = require('socket.io');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 
 const app = express();
-const server = http.createServer(app);
 
 // -------------------------------------------------------------
 // Configuration (override via environment variables)
@@ -50,10 +47,6 @@ const ENABLE_MOCK_GPS = process.env.ENABLE_MOCK_GPS === 'true' || process.env.NO
 // rate-limit bucket.
 const TRUST_PROXY = process.env.TRUST_PROXY || '0';
 app.set('trust proxy', /^\d+$/.test(TRUST_PROXY) ? parseInt(TRUST_PROXY, 10) : TRUST_PROXY);
-
-const io = socketIo(server, {
-  cors: { origin: process.env.CORS_ORIGIN || false, methods: ["GET", "POST"] }
-});
 
 app.use(express.json({ limit: '100kb' }));
 // Filenames are not content-hashed, so only images (which rarely change and
@@ -470,24 +463,46 @@ const RATE_WINDOW_MS = 15 * 60 * 1000;
 const MAX_ORDERS_PER_WINDOW = 4;
 
 setInterval(() => {
-  pruneAdminTokens();
   pruneLoginAttempts();
 }, 10 * 60 * 1000).unref();
 
 // -------------------------------------------------------------
 // Admin authentication
 // -------------------------------------------------------------
-const ADMIN_TOKEN_TTL_MS = 12 * 60 * 60 * 1000;
-const adminTokens = new Map(); // token -> expiry timestamp
+const ADMIN_TOKEN_TTL_MS = 8 * 60 * 60 * 1000;
 const loginAttempts = new Map(); // ip -> [timestamps of failures]
 const MAX_LOGIN_FAILURES = 8;
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 
-function pruneAdminTokens() {
-  const now = Date.now();
-  for (const [token, expiry] of adminTokens) {
-    if (expiry <= now) adminTokens.delete(token);
-  }
+// Admin sessions are stateless HMAC tokens rather than a server-side Map.
+// On serverless every request may hit a fresh instance, so an in-memory token
+// store would sign you in and then reject the very next click. The signing key
+// is derived from the password, so changing ADMIN_PASSWORD invalidates every
+// outstanding session.
+const TOKEN_SECRET = crypto.createHash('sha256')
+  .update('otea-admin-session:' + ADMIN_PASSWORD)
+  .digest();
+
+function signAdminToken(expiresAt) {
+  const payload = String(expiresAt);
+  const mac = crypto.createHmac('sha256', TOKEN_SECRET).update(payload).digest('base64url');
+  return payload + '.' + mac;
+}
+
+function isValidAdminToken(token) {
+  if (typeof token !== 'string' || !token.includes('.')) return false;
+
+  const idx = token.lastIndexOf('.');
+  const payload = token.slice(0, idx);
+  const mac = token.slice(idx + 1);
+
+  const expected = crypto.createHmac('sha256', TOKEN_SECRET).update(payload).digest('base64url');
+  const a = Buffer.from(mac);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return false;
+
+  const expiresAt = Number(payload);
+  return Number.isFinite(expiresAt) && expiresAt > Date.now();
 }
 
 function pruneLoginAttempts() {
@@ -497,17 +512,6 @@ function pruneLoginAttempts() {
     if (fresh.length) loginAttempts.set(ip, fresh);
     else loginAttempts.delete(ip);
   }
-}
-
-function isValidAdminToken(token) {
-  if (!token) return false;
-  const expiry = adminTokens.get(token);
-  if (!expiry) return false;
-  if (expiry <= Date.now()) {
-    adminTokens.delete(token);
-    return false;
-  }
-  return true;
 }
 
 // Constant-time compare so the password cannot be recovered by timing responses.
@@ -544,14 +548,14 @@ app.post('/api/admin/login', (req, res) => {
   }
 
   loginAttempts.delete(ip);
-  const token = crypto.randomBytes(32).toString('hex');
-  adminTokens.set(token, Date.now() + ADMIN_TOKEN_TTL_MS);
+  const token = signAdminToken(Date.now() + ADMIN_TOKEN_TTL_MS);
   res.json({ success: true, token, expiresIn: ADMIN_TOKEN_TTL_MS });
 });
 
+// Stateless tokens cannot be revoked server-side, so logout simply tells the
+// browser to discard it. To force everyone out, change ADMIN_PASSWORD - that
+// rotates the signing key and invalidates every outstanding session.
 app.post('/api/admin/logout', requireAdmin, (req, res) => {
-  const token = (req.headers.authorization || '').slice(7);
-  adminTokens.delete(token);
   res.json({ success: true });
 });
 
@@ -877,9 +881,6 @@ app.post('/api/orders', (req, res) => {
 
   store.saveOrder(newOrder);
 
-  // Staff-only channel: full record including phone, IP and coordinates.
-  io.to('admin').emit('new_order', newOrder);
-
   res.status(201).json({
     success: true,
     orderId: newOrder.id,
@@ -981,9 +982,6 @@ app.post('/api/admin/menu/:id/availability', requireAdmin, (req, res) => {
 
   store.setAvailability(id, req.body.available);
 
-  // Customers with the menu open see it grey out without reloading.
-  io.emit('menu_availability_changed', { id, available: req.body.available });
-
   res.json({ success: true, id, available: req.body.available });
 });
 
@@ -1008,7 +1006,6 @@ app.post('/api/admin/orders/:id/status', requireAdmin, (req, res) => {
     : undefined;
 
   const order = store.updateOrder(req.params.id, { status, paymentStatus });
-  broadcastOrderUpdate(order);
   res.json({ success: true, order });
 });
 
@@ -1021,7 +1018,6 @@ app.post('/api/admin/orders/:id/pay', requireAdmin, (req, res) => {
   }
 
   const order = store.updateOrder(req.params.id, { paymentStatus: 'paid' });
-  broadcastOrderUpdate(order);
   res.json({ success: true, order });
 });
 
@@ -1036,56 +1032,14 @@ app.post('/api/payments/webhook', (req, res) => {
   return res.status(501).json({ error: 'Gateway webhook handler not implemented yet.' });
 });
 
-function broadcastOrderUpdate(order) {
-  const payload = {
-    id: order.id,
-    status: order.status,
-    paymentStatus: order.paymentStatus
-  };
-  io.to('admin').emit('order_status_update', payload);
-  // Only the customer tracking this specific order hears about it.
-  io.to(`order:${order.id}`).emit('order_status_update', payload);
-}
-
 // -------------------------------------------------------------
-// Socket.io: admins are authenticated and isolated in their own room
+// Entry point
+//
+// On Vercel the platform imports this module and drives it as a serverless
+// function, so it must not bind a port. Running it directly (npm start) still
+// starts a normal long-lived server for local development.
 // -------------------------------------------------------------
-io.use((socket, next) => {
-  const token = socket.handshake.auth && socket.handshake.auth.adminToken;
-  socket.data.isAdmin = isValidAdminToken(token);
-  next();
-});
-
-io.on('connection', (socket) => {
-  if (socket.data.isAdmin) {
-    socket.join('admin');
-    console.log(`Admin client connected: ${socket.id}`);
-  }
-
-  socket.emit('restaurant_info', {
-    lat: RESTAURANT_LAT,
-    lng: RESTAURANT_LNG
-  });
-
-  // A customer subscribes to just their own order's updates.
-  socket.on('track_order', (orderId) => {
-    if (typeof orderId !== 'string' || !/^ORD-\d{6}$/.test(orderId)) return;
-    socket.rooms.forEach(room => {
-      if (room.startsWith('order:')) socket.leave(room);
-    });
-    socket.join(`order:${orderId}`);
-  });
-
-  socket.on('disconnect', () => {
-    if (socket.data.isAdmin) console.log(`Admin client disconnected: ${socket.id}`);
-  });
-});
-
-// -------------------------------------------------------------
-// Start the server
-// -------------------------------------------------------------
-server.listen(PORT, () => {
-  console.log(`=== Tea/Coffee Order Server Running on http://localhost:${PORT} ===`);
+function describeBoot() {
   console.log(`Shop location anchored at: Lat ${RESTAURANT_LAT}, Lng ${RESTAURANT_LNG}`);
   console.log('Ordering zones:');
   ORDER_ZONES.forEach(z => {
@@ -1101,4 +1055,15 @@ server.listen(PORT, () => {
   if (!PAYMENT_GATEWAY_ENABLED) {
     console.log('Payment gateway: DISABLED - all orders start unpaid and must be confirmed by staff.');
   }
-});
+}
+
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`=== OTea x GreyOne server running on http://localhost:${PORT} ===`);
+    describeBoot();
+  });
+} else {
+  describeBoot();
+}
+
+module.exports = app;

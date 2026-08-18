@@ -1,9 +1,10 @@
 // Admin Application State
 let orders = [];
-let socket = null;
+let pollTimer = null;
+let knownOrderIds = new Set();
 let mapInstance = null;
 let mapMarkers = {};
-let restaurantLocation = { lat: 3.2158, lng: 101.7290 }; // replaced by restaurant_info on connect
+let restaurantLocation = { lat: 3.2158, lng: 101.7290 }; // replaced by /api/config on sign-in
 
 // Staff session token, issued by POST /api/admin/login.
 let adminToken = sessionStorage.getItem('luxe_admin_token');
@@ -80,7 +81,8 @@ function startConsole() {
   document.getElementById('adminWorkspace').style.display = 'flex';
 
   if (!mapInstance) initMap();
-  if (!socket) initSocket();
+  loadShopLocation();
+  startPolling();
   fetchAllOrders();
 }
 
@@ -92,10 +94,7 @@ function signOut() {
 function clearSession(message) {
   adminToken = null;
   sessionStorage.removeItem('luxe_admin_token');
-  if (socket) {
-    socket.disconnect();
-    socket = null;
-  }
+  stopPolling();
   showLoginGate(message);
 }
 
@@ -115,60 +114,70 @@ async function adminFetch(url, options) {
   return res;
 }
 
-function initSocket() {
-  // The handshake token is what puts this socket in the staff-only room.
-  socket = io({ auth: { adminToken } });
+// -------------------------------------------------------------
+// Polling
+//
+// Serverless functions cannot hold a WebSocket open, so the console refreshes
+// the queue on a timer instead. New order ids are diffed against the previous
+// poll so the counter still gets a chime when an order arrives.
+// -------------------------------------------------------------
+const POLL_INTERVAL_MS = 8000;
 
-  const statusLabel = document.getElementById('socketStatus');
+function startPolling() {
+  stopPolling();
+  pollTimer = setInterval(pollOrders, POLL_INTERVAL_MS);
+  setConnectionLabel(true);
 
-  socket.on('connect', () => {
-    statusLabel.innerText = "CONNECTED";
-    statusLabel.style.color = "var(--success)";
-  });
+  // Pause while the tab is hidden; catch up immediately on return.
+  document.addEventListener('visibilitychange', handleVisibility);
+}
 
-  socket.on('disconnect', () => {
-    statusLabel.innerText = "OFFLINE";
-    statusLabel.style.color = "var(--danger)";
-  });
+function stopPolling() {
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = null;
+  document.removeEventListener('visibilitychange', handleVisibility);
+  setConnectionLabel(false);
+}
 
-  socket.on('restaurant_info', (info) => {
-    restaurantLocation = info;
-    if (mapInstance) {
-      mapInstance.setView([restaurantLocation.lat, restaurantLocation.lng], 13);
-      L.marker([restaurantLocation.lat, restaurantLocation.lng], {
-        icon: L.divIcon({
-          html: `<div style="font-size: 2.2rem; filter: drop-shadow(0 0 6px var(--accent-color));">✨</div>`,
-          className: 'custom-div-icon',
-          iconSize: [35, 35],
-          iconAnchor: [17, 17]
-        })
-      })
-      .addTo(mapInstance)
-      .bindPopup("<strong>OTea x GreyOne</strong>")
-      .openPopup();
-    }
-  });
+function handleVisibility() {
+  if (document.hidden) {
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = null;
+  } else if (adminToken && !pollTimer) {
+    pollOrders();
+    pollTimer = setInterval(pollOrders, POLL_INTERVAL_MS);
+  }
+}
 
-  // Listen for new orders
-  socket.on('new_order', (newOrder) => {
-    orders.unshift(newOrder);
-    playNotificationSound();
+function setConnectionLabel(live) {
+  const label = document.getElementById('socketStatus');
+  if (!label) return;
+  label.innerText = live ? 'LIVE' : 'PAUSED';
+  label.style.color = live ? 'var(--success)' : 'var(--danger)';
+}
+
+async function pollOrders() {
+  if (!adminToken) return;
+  try {
+    const res = await adminFetch('/api/admin/orders');
+    if (!res.ok) return;
+    const fresh = await res.json();
+
+    const arrived = fresh.filter(o => !knownOrderIds.has(o.id));
+    fresh.forEach(o => knownOrderIds.add(o.id));
+
+    orders = fresh;
+    orders.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
     renderOrdersQueue();
     updateMetrics();
-    plotOrderMarker(newOrder);
-  });
+    plotAllMarkers();
+    setConnectionLabel(true);
 
-  // Listen for order status updates
-  socket.on('order_status_update', (data) => {
-    const order = orders.find(o => o.id === data.id);
-    if (order) {
-      if (data.status) order.status = data.status;
-      if (data.paymentStatus) order.paymentStatus = data.paymentStatus;
-      renderOrdersQueue();
-      updateMetrics();
-      updateOrderMarkerPopup(order);
-    }
-  });
+    if (arrived.length) playNotificationSound();
+  } catch (err) {
+    setConnectionLabel(false);
+  }
 }
 
 function playNotificationSound() {
@@ -197,7 +206,7 @@ async function fetchAllOrders() {
   try {
     const res = await adminFetch('/api/admin/orders');
     orders = await res.json();
-    
+    orders.forEach(o => knownOrderIds.add(o.id));
     orders.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
     renderOrdersQueue();
@@ -423,6 +432,19 @@ function updateMetrics() {
 // -------------------------------------------------------------
 // Live GPS Radar Maps
 // -------------------------------------------------------------
+async function loadShopLocation() {
+  try {
+    const res = await fetch('/api/config');
+    const cfg = await res.json();
+    if (cfg.restaurant) {
+      restaurantLocation = cfg.restaurant;
+      if (mapInstance) mapInstance.setView([restaurantLocation.lat, restaurantLocation.lng], 13);
+    }
+  } catch (err) {
+    console.warn('Could not load shop location', err);
+  }
+}
+
 function initMap() {
   mapInstance = L.map('adminLiveMap').setView([restaurantLocation.lat, restaurantLocation.lng], 12);
 

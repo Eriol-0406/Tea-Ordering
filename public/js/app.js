@@ -7,7 +7,6 @@ let currentStep = 1;
 let selectedPaymentMethod = null;
 let activeOrder = null;
 let mapInstance = null;
-let socket = null;
 // Placeholder only. The real coordinate arrives from /api/config before any
 // map is drawn - see the init sequence below.
 let restaurantLocation = { lat: 3.2158, lng: 101.7290 };
@@ -62,39 +61,53 @@ document.addEventListener('DOMContentLoaded', async () => {
   // around the placeholder location.
   await fetchConfig();
 
-  initSocket();
-  fetchMenu();
+  await fetchMenu();
+  startMenuRefresh();
   loadCartFromStorage();
   checkActiveOrder();
 });
 
-function initSocket() {
-  socket = io();
+// -------------------------------------------------------------
+// Menu freshness
+//
+// Serverless cannot push, so the menu is re-checked periodically and whenever
+// the customer returns to the tab. A drink that sold out while they were
+// deciding is caught before they reach checkout, and the server rejects it
+// regardless.
+// -------------------------------------------------------------
+const MENU_REFRESH_MS = 30000;
 
-  socket.on('connect', () => {
-    if (activeOrder) socket.emit('track_order', activeOrder.id);
+function startMenuRefresh() {
+  setInterval(refreshAvailability, MENU_REFRESH_MS);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) refreshAvailability();
   });
+}
 
-  socket.on('restaurant_info', (info) => {
-    restaurantLocation = info;
-  });
+async function refreshAvailability() {
+  if (!menuData.length) return;
+  try {
+    const res = await fetch('/api/menu');
+    if (!res.ok) return;
+    const fresh = await res.json();
 
-  // Staff marking a drink sold out greys it out on open menus immediately.
-  socket.on('menu_availability_changed', ({ id, available }) => {
-    const item = menuData.find(m => m.id === id);
-    if (!item) return;
-    item.available = available;
+    let changed = false;
+    let wentOut = false;
+
+    fresh.forEach(f => {
+      const item = menuData.find(m => m.id === f.id);
+      if (!item || item.available === f.available) return;
+      if (f.available === false) wentOut = true;
+      item.available = f.available;
+      changed = true;
+    });
+
+    if (!changed) return;
     renderMenu(currentlyVisibleItems());
-    if (!available) flagSoldOutInCart();
-  });
-
-  socket.on('order_status_update', (data) => {
-    if (activeOrder && activeOrder.id === data.id) {
-      if (data.status) activeOrder.status = data.status;
-      if (data.paymentStatus) activeOrder.paymentStatus = data.paymentStatus;
-      updateTrackingUI();
-    }
-  });
+    if (wentOut) flagSoldOutInCart();
+  } catch (err) {
+    // A failed refresh is not worth interrupting the customer over.
+  }
 }
 
 async function fetchConfig() {
@@ -1099,7 +1112,6 @@ async function pollOrderStatus() {
 }
 
 function showTrackingView() {
-  if (socket && activeOrder) socket.emit('track_order', activeOrder.id);
   switchTab('status');
 }
 

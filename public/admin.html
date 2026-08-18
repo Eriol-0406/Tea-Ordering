@@ -54,7 +54,7 @@
 
     <!-- Footer session details -->
     <div style="margin-top: auto; padding-top: 1rem; border-top: 1px solid var(--panel-border); font-size: 0.75rem; color: var(--text-muted);">
-      Socket Link: <span id="socketStatus" style="color: var(--danger); font-weight: 700;">OFFLINE</span><br>
+      Queue: <span id="socketStatus" style="color: var(--danger); font-weight: 700;">PAUSED</span><br>
       Version: 1.0.0 (Beta)
       <button class="btn btn-secondary" onclick="signOut()" style="width:100%; margin-top:0.75rem; padding:0.4rem; font-size:0.75rem;">Sign Out</button>
     </div>
@@ -216,7 +216,6 @@
   </div>
 
   <!-- Socket.io Script and Leaflet.js Scripts -->
-  <script src="/socket.io/socket.io.js"></script>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
   <!-- Main Logic -->
   <script src="/js/admin.js"></script>
