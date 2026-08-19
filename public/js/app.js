@@ -35,6 +35,17 @@ let appConfig = { enableMockGps: false, paymentGatewayEnabled: false };
 
 // Anything that originates from a person (their own name, notes, or menu text)
 // is escaped before it goes anywhere near innerHTML.
+// The server may answer with an HTML error page rather than JSON if it is
+// misconfigured; surface that as a readable message instead of a parse error.
+async function readJsonOrExplain(res) {
+  const body = await res.text();
+  try {
+    return JSON.parse(body);
+  } catch {
+    throw new Error('The shop system is temporarily unavailable. Please try again in a moment.');
+  }
+}
+
 function esc(value) {
   if (value === null || value === undefined) return '';
   return String(value)
@@ -1047,7 +1058,7 @@ async function submitFinalOrder() {
       body: JSON.stringify(payload)
     });
 
-    const data = await res.json();
+    const data = await readJsonOrExplain(res);
 
     if (!res.ok) {
       throw new Error(data.error || "Failed to place order.");

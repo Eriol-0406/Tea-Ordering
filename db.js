@@ -14,31 +14,41 @@
 // -------------------------------------------------------------
 const { Pool, types } = require('pg');
 
-if (!process.env.DATABASE_URL) {
-  throw new Error(
-    'DATABASE_URL is not set. Copy the Supabase "Transaction pooler" connection ' +
-    'string (port 6543) into .env, and add it to the host\'s environment variables. ' +
-    'Schema: migrations/001_init_postgres.sql'
-  );
-}
+const MISSING_URL_MESSAGE =
+  'DATABASE_URL is not set. Copy the Supabase "Transaction pooler" connection ' +
+  'string (port 6543) into .env for local use, and add it to the host\'s ' +
+  'environment variables for deployment. Schema: migrations/001_init_postgres.sql';
 
 // NUMERIC arrives as a string by default, which would turn RM totals into
 // string concatenation the first time anything added them up.
 types.setTypeParser(1700, parseFloat);
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false },
-  max: parseInt(process.env.DB_POOL_MAX || '3', 10),
-  idleTimeoutMillis: 10000,
-  connectionTimeoutMillis: 15000
-});
+// The pool is built on first use rather than at import. Throwing while a
+// serverless platform is importing the module takes down every route with an
+// opaque FUNCTION_INVOCATION_FAILED; failing at query time instead surfaces a
+// readable error and leaves the menu, health check and static pages working.
+let pool = null;
 
-pool.on('error', (err) => {
-  console.error('Idle Postgres client error:', err.message);
-});
+function getPool() {
+  if (pool) return pool;
+  if (!process.env.DATABASE_URL) throw new Error(MISSING_URL_MESSAGE);
 
-const query = (text, params) => pool.query(text, params);
+  pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: { rejectUnauthorized: false },
+    max: parseInt(process.env.DB_POOL_MAX || '3', 10),
+    idleTimeoutMillis: 10000,
+    connectionTimeoutMillis: 15000
+  });
+
+  pool.on('error', (err) => {
+    console.error('Idle Postgres client error:', err.message);
+  });
+
+  return pool;
+}
+
+const query = (text, params) => getPool().query(text, params);
 
 // -------------------------------------------------------------
 // Row <-> app object mapping
@@ -108,7 +118,7 @@ module.exports = {
   async saveOrder(order) {
     // An order and its line items must land together, so they share one
     // client and one transaction.
-    const client = await pool.connect();
+    const client = await getPool().connect();
     try {
       await client.query('BEGIN');
 
@@ -286,7 +296,21 @@ module.exports = {
     return rows.map(r => ({ name: r.name, sold: r.sold, revenue: Number(r.revenue) }));
   },
 
+  // Reports config health without leaking any values.
+  async health() {
+    const configured = !!process.env.DATABASE_URL;
+    if (!configured) return { configured: false, reachable: false, error: MISSING_URL_MESSAGE };
+    try {
+      const { rows } = await query('SELECT 1 AS ok');
+      return { configured: true, reachable: rows[0].ok === 1 };
+    } catch (err) {
+      // Driver errors can embed the connection string.
+      const safe = String(err.message).replace(/postgres(ql)?:\/\/\S+/gi, '[redacted]');
+      return { configured: true, reachable: false, error: safe };
+    }
+  },
+
   async close() {
-    await pool.end();
+    if (pool) await pool.end();
   }
 };

@@ -13,6 +13,22 @@ let adminToken = sessionStorage.getItem('luxe_admin_token');
 // Escaping: order fields are typed by customers, so nothing from an
 // order may ever be dropped into innerHTML unescaped.
 // -------------------------------------------------------------
+// A crashed or misconfigured server answers with an HTML error page, not JSON.
+// Parsing that blindly produced "Unexpected token 'A'" instead of telling the
+// user what actually went wrong.
+async function readJsonOrExplain(res) {
+  const body = await res.text();
+  try {
+    return JSON.parse(body);
+  } catch {
+    if (res.status >= 500) {
+      throw new Error('The server is not responding correctly (HTTP ' + res.status +
+        '). Check /api/health for the cause.');
+    }
+    throw new Error('Unexpected response from the server (HTTP ' + res.status + ').');
+  }
+}
+
 function esc(value) {
   if (value === null || value === undefined) return '';
   return String(value)
@@ -61,7 +77,7 @@ async function handleLogin(event) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ password: input.value })
     });
-    const data = await res.json();
+    const data = await readJsonOrExplain(res);
     if (!res.ok) throw new Error(data.error || 'Sign-in failed');
 
     adminToken = data.token;
@@ -349,7 +365,7 @@ async function changeStatus(id, newStatus) {
     });
 
     if (!res.ok) throw new Error("Failed updating status");
-    const data = await res.json();
+    const data = await readJsonOrExplain(res);
     
     const idx = orders.findIndex(o => o.id === id);
     if (idx !== -1) {
@@ -370,7 +386,7 @@ async function markAsPaid(id) {
     });
 
     if (!res.ok) throw new Error("Failed marking payment");
-    const data = await res.json();
+    const data = await readJsonOrExplain(res);
 
     const idx = orders.findIndex(o => o.id === id);
     if (idx !== -1) {
@@ -652,7 +668,7 @@ async function loadHistory(offset) {
     const qs = historyQueryString({ limit: historyState.limit, offset: historyState.offset });
     const res = await adminFetch(`/api/admin/history?${qs}`);
     if (!res.ok) throw new Error('Search failed');
-    const data = await res.json();
+    const data = await readJsonOrExplain(res);
 
     historyState.total = data.total;
     historyState.loaded = true;

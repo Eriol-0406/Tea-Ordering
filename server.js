@@ -651,6 +651,25 @@ function trackingView(order) {
 // API Endpoints
 // -------------------------------------------------------------
 
+// 0. Health check.
+// Deliberately reports only whether things are configured, never any values,
+// so it is safe to leave public and to paste into a support conversation.
+app.get('/api/health', async (req, res) => {
+  const db = await store.health();
+  res.status(db.reachable ? 200 : 503).json({
+    ok: db.reachable,
+    env: {
+      DATABASE_URL: !!process.env.DATABASE_URL,
+      ADMIN_PASSWORD: !!process.env.ADMIN_PASSWORD,
+      NODE_ENV: process.env.NODE_ENV || '(unset)',
+      TRUST_PROXY: process.env.TRUST_PROXY || '(unset)'
+    },
+    database: db,
+    zones: ORDER_ZONES.map(z => z.name),
+    menuItems: menuItems.length
+  });
+});
+
 // 1. Get restaurant menu, annotated with what is currently sold out
 app.get('/api/menu', async (req, res, next) => {
   try {
