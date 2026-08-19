@@ -1095,8 +1095,23 @@ function checkActiveOrder() {
   if (stored) {
     activeOrder = JSON.parse(stored);
     showTrackingView();
-    setInterval(pollOrderStatus, 5000);
   }
+}
+
+// One timer, started whenever an order becomes active - whether it was just
+// placed or restored on load. Previously polling only began on a page load, so
+// a customer who had just ordered never saw their status change once the
+// WebSocket push was removed.
+let orderPollTimer = null;
+
+function startOrderPolling() {
+  if (orderPollTimer) return;
+  orderPollTimer = setInterval(pollOrderStatus, 5000);
+}
+
+function stopOrderPolling() {
+  if (orderPollTimer) clearInterval(orderPollTimer);
+  orderPollTimer = null;
 }
 
 async function pollOrderStatus() {
@@ -1112,6 +1127,7 @@ async function pollOrderStatus() {
 }
 
 function showTrackingView() {
+  startOrderPolling();
   switchTab('status');
 }
 
@@ -1195,6 +1211,7 @@ function updateTrackingUI() {
 
   if (activeOrder.status === 'completed' || activeOrder.status === 'cancelled') {
     sessionStorage.removeItem('luxe_active_order');
+    stopOrderPolling();
   }
 }
 

@@ -1,89 +1,47 @@
 // -------------------------------------------------------------
-// SQLite order store.
+// Postgres order store (Supabase).
 //
-// Orders live in two tables: one row per order, one row per drink in
-// order_items, so per-drink sales can be reported without unpacking JSON.
-// Everything is synchronous - better-sqlite3 is fast enough for a single
-// counter and it keeps the request handlers free of callback juggling.
+// Every method is async and returns the same shapes the app used under SQLite,
+// so callers only had to gain `await`.
+//
+// Connection notes:
+//  - DATABASE_URL should be Supabase's *transaction* pooler (port 6543).
+//    Serverless opens a connection per invocation, which is what it is for.
+//  - node-postgres sends unnamed prepared statements, which pgBouncer's
+//    transaction mode supports. Do not switch to named statements.
+//  - The pool is deliberately tiny: many short-lived function instances each
+//    holding a big pool would exhaust the pooler.
 // -------------------------------------------------------------
-const Database = require('better-sqlite3');
-const fs = require('fs');
-const path = require('path');
+const { Pool, types } = require('pg');
 
-const DATA_DIR = path.join(__dirname, 'data');
-const DB_FILE = process.env.DATABASE_FILE || path.join(DATA_DIR, 'orders.db');
-
-// SQLite needs a writable directory. Serverless platforms mount the deployment
-// read-only, so fail with an explanation rather than an opaque EROFS stack.
-try {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-} catch (err) {
-  if (err.code === 'EROFS' || err.code === 'EACCES') {
-    throw new Error(
-      'Cannot write the SQLite database on this platform (read-only filesystem). ' +
-      'Set DATABASE_URL to a Postgres connection string - see migrations/001_init_postgres.sql.'
-    );
-  }
-  throw err;
+if (!process.env.DATABASE_URL) {
+  throw new Error(
+    'DATABASE_URL is not set. Copy the Supabase "Transaction pooler" connection ' +
+    'string (port 6543) into .env, and add it to the host\'s environment variables. ' +
+    'Schema: migrations/001_init_postgres.sql'
+  );
 }
 
-const db = new Database(DB_FILE);
-db.pragma('journal_mode = WAL');   // survives an unclean shutdown mid-write
-db.pragma('foreign_keys = ON');
+// NUMERIC arrives as a string by default, which would turn RM totals into
+// string concatenation the first time anything added them up.
+types.setTypeParser(1700, parseFloat);
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS orders (
-    id             TEXT PRIMARY KEY,
-    customer_name  TEXT NOT NULL,
-    phone          TEXT NOT NULL,
-    notes          TEXT NOT NULL DEFAULT '',
-    total          REAL NOT NULL,
-    payment_method TEXT NOT NULL,
-    payment_status TEXT NOT NULL,
-    status         TEXT NOT NULL,
-    latitude       REAL,
-    longitude      REAL,
-    distance       REAL,
-    zone_name      TEXT,
-    spam_risk      TEXT,
-    risk_reason    TEXT,
-    ip_address     TEXT,
-    session_id     TEXT,
-    created_at     TEXT NOT NULL,
-    updated_at     TEXT NOT NULL
-  );
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false },
+  max: parseInt(process.env.DB_POOL_MAX || '3', 10),
+  idleTimeoutMillis: 10000,
+  connectionTimeoutMillis: 15000
+});
 
-  CREATE TABLE IF NOT EXISTS order_items (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    order_id     TEXT NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
-    menu_item_id INTEGER NOT NULL,
-    name         TEXT NOT NULL,
-    variant_name TEXT,
-    price        REAL NOT NULL,
-    quantity     INTEGER NOT NULL,
-    ice          TEXT,
-    sugar        TEXT,
-    tea_base     TEXT,
-    addons_text  TEXT
-  );
+pool.on('error', (err) => {
+  console.error('Idle Postgres client error:', err.message);
+});
 
-  -- Only sold-out items are stored; anything absent is available. The menu
-  -- itself still lives in server.js, so this survives menu edits by id.
-  CREATE TABLE IF NOT EXISTS menu_availability (
-    menu_item_id INTEGER PRIMARY KEY,
-    available    INTEGER NOT NULL DEFAULT 1,
-    updated_at   TEXT NOT NULL
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_orders_created  ON orders(created_at DESC);
-  CREATE INDEX IF NOT EXISTS idx_orders_status   ON orders(status);
-  CREATE INDEX IF NOT EXISTS idx_orders_session  ON orders(session_id);
-  CREATE INDEX IF NOT EXISTS idx_orders_ip       ON orders(ip_address, created_at);
-  CREATE INDEX IF NOT EXISTS idx_items_order     ON order_items(order_id);
-`);
+const query = (text, params) => pool.query(text, params);
 
 // -------------------------------------------------------------
-// Row <-> app object mapping. The app speaks camelCase; SQL speaks snake_case.
+// Row <-> app object mapping
 // -------------------------------------------------------------
 function rowToOrder(row, items) {
   if (!row) return null;
@@ -93,7 +51,7 @@ function rowToOrder(row, items) {
     phone: row.phone,
     notes: row.notes,
     items: items || [],
-    total: row.total,
+    total: Number(row.total),
     paymentMethod: row.payment_method,
     paymentStatus: row.payment_status,
     status: row.status,
@@ -105,7 +63,8 @@ function rowToOrder(row, items) {
     riskReason: row.risk_reason,
     ipAddress: row.ip_address,
     sessionId: row.session_id,
-    createdAt: row.created_at
+    // The app and the frontend both speak ISO strings.
+    createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at
   };
 }
 
@@ -114,7 +73,7 @@ function rowToItem(row) {
     id: row.menu_item_id,
     name: row.name,
     variantName: row.variant_name,
-    price: row.price,
+    price: Number(row.price),
     quantity: row.quantity,
     ice: row.ice,
     sugar: row.sugar,
@@ -123,245 +82,211 @@ function rowToItem(row) {
   };
 }
 
-const stmts = {
-  insertOrder: db.prepare(`
-    INSERT INTO orders (id, customer_name, phone, notes, total, payment_method,
-      payment_status, status, latitude, longitude, distance, zone_name,
-      spam_risk, risk_reason, ip_address, session_id, created_at, updated_at)
-    VALUES (@id, @customerName, @phone, @notes, @total, @paymentMethod,
-      @paymentStatus, @status, @latitude, @longitude, @distance, @zoneName,
-      @spamRisk, @riskReason, @ipAddress, @sessionId, @createdAt, @createdAt)
-  `),
-  insertItem: db.prepare(`
-    INSERT INTO order_items (order_id, menu_item_id, name, variant_name, price,
-      quantity, ice, sugar, tea_base, addons_text)
-    VALUES (@orderId, @id, @name, @variantName, @price, @quantity, @ice,
-      @sugar, @teaBase, @addonsText)
-  `),
-  getOrder: db.prepare(`SELECT * FROM orders WHERE id = ?`),
-  getItems: db.prepare(`SELECT * FROM order_items WHERE order_id = ? ORDER BY id`),
-  listOrders: db.prepare(`SELECT * FROM orders ORDER BY created_at DESC LIMIT ?`),
-  allItems: db.prepare(`SELECT * FROM order_items`),
-  updateOrder: db.prepare(`
-    UPDATE orders SET status = @status, payment_status = @paymentStatus,
-      updated_at = @updatedAt WHERE id = @id
-  `),
-  countUnpaidForSession: db.prepare(`
-    SELECT COUNT(*) AS n FROM orders
-    WHERE session_id = ? AND payment_status = 'pending' AND status != 'cancelled'
-  `),
-  countRecentForIp: db.prepare(`
-    SELECT COUNT(*) AS n FROM orders WHERE ip_address = ? AND created_at >= ?
-  `),
-  salesByDay: db.prepare(`
-    SELECT substr(created_at, 1, 10) AS day, COUNT(*) AS orders,
-           SUM(total) AS revenue
-    FROM orders WHERE payment_status = 'paid' AND status = 'completed'
-    GROUP BY day ORDER BY day DESC LIMIT ?
-  `),
-  listUnavailable: db.prepare(`SELECT menu_item_id FROM menu_availability WHERE available = 0`),
-  setAvailability: db.prepare(`
-    INSERT INTO menu_availability (menu_item_id, available, updated_at)
-    VALUES (@id, @available, @updatedAt)
-    ON CONFLICT(menu_item_id) DO UPDATE SET
-      available = excluded.available, updated_at = excluded.updated_at
-  `),
-  topDrinks: db.prepare(`
-    SELECT oi.name, SUM(oi.quantity) AS sold, SUM(oi.price * oi.quantity) AS revenue
-    FROM order_items oi JOIN orders o ON o.id = oi.order_id
-    WHERE o.status = 'completed'
-    GROUP BY oi.name ORDER BY sold DESC LIMIT ?
-  `)
-};
+// Groups line items by order id in one pass, so listing N orders stays two
+// queries rather than N+1.
+async function itemsFor(orderIds) {
+  const byOrder = new Map();
+  if (!orderIds.length) return byOrder;
 
-// An order and its items must land together or not at all.
-const insertOrderTx = db.transaction((order) => {
-  stmts.insertOrder.run({
-    id: order.id,
-    customerName: order.customerName,
-    phone: order.phone,
-    notes: order.notes || '',
-    total: order.total,
-    paymentMethod: order.paymentMethod,
-    paymentStatus: order.paymentStatus,
-    status: order.status,
-    latitude: order.latitude,
-    longitude: order.longitude,
-    distance: order.distance,
-    zoneName: order.zoneName || null,
-    spamRisk: order.spamRisk,
-    riskReason: order.riskReason,
-    ipAddress: order.ipAddress,
-    sessionId: order.sessionId,
-    createdAt: order.createdAt
-  });
-  for (const item of order.items) {
-    stmts.insertItem.run({
-      orderId: order.id,
-      id: item.id,
-      name: item.name,
-      variantName: item.variantName,
-      price: item.price,
-      quantity: item.quantity,
-      ice: item.ice,
-      sugar: item.sugar,
-      teaBase: item.teaBase,
-      addonsText: item.addonsText
-    });
+  const { rows } = await query(
+    'SELECT * FROM order_items WHERE order_id = ANY($1::text[]) ORDER BY id',
+    [orderIds]
+  );
+  for (const row of rows) {
+    if (!byOrder.has(row.order_id)) byOrder.set(row.order_id, []);
+    byOrder.get(row.order_id).push(rowToItem(row));
   }
-});
+  return byOrder;
+}
 
 module.exports = {
-  file: DB_FILE,
+  describe: 'Supabase Postgres',
 
-  saveOrder(order) {
-    insertOrderTx(order);
-    return order;
-  },
+  // -----------------------------------------------------------
+  // Orders
+  // -----------------------------------------------------------
+  async saveOrder(order) {
+    // An order and its line items must land together, so they share one
+    // client and one transaction.
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
 
-  getOrder(id) {
-    const row = stmts.getOrder.get(id);
-    if (!row) return null;
-    return rowToOrder(row, stmts.getItems.all(id).map(rowToItem));
-  },
+      await client.query(
+        `INSERT INTO orders (id, customer_name, phone, notes, total, payment_method,
+           payment_status, status, latitude, longitude, distance, zone_name,
+           spam_risk, risk_reason, ip_address, session_id, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$17)`,
+        [order.id, order.customerName, order.phone, order.notes || '', order.total,
+         order.paymentMethod, order.paymentStatus, order.status, order.latitude,
+         order.longitude, order.distance, order.zoneName || null, order.spamRisk,
+         order.riskReason, order.ipAddress, order.sessionId, order.createdAt]
+      );
 
-  // One query for orders and one for items, stitched in memory, so listing N
-  // orders never becomes N+1 queries.
-  listOrders(limit = 500) {
-    const rows = stmts.listOrders.all(limit);
-    const byOrder = new Map();
-    for (const item of stmts.allItems.all()) {
-      if (!byOrder.has(item.order_id)) byOrder.set(item.order_id, []);
-      byOrder.get(item.order_id).push(rowToItem(item));
+      for (const item of order.items) {
+        await client.query(
+          `INSERT INTO order_items (order_id, menu_item_id, name, variant_name,
+             price, quantity, ice, sugar, tea_base, addons_text)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+          [order.id, item.id, item.name, item.variantName, item.price,
+           item.quantity, item.ice, item.sugar, item.teaBase, item.addonsText]
+        );
+      }
+
+      await client.query('COMMIT');
+      return order;
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
     }
-    return rows.map(row => rowToOrder(row, byOrder.get(row.id) || []));
   },
 
-  updateOrder(id, { status, paymentStatus }) {
-    const current = stmts.getOrder.get(id);
-    if (!current) return null;
-    stmts.updateOrder.run({
-      id,
-      status: status !== undefined ? status : current.status,
-      paymentStatus: paymentStatus !== undefined ? paymentStatus : current.payment_status,
-      updatedAt: new Date().toISOString()
-    });
+  async getOrder(id) {
+    const { rows } = await query('SELECT * FROM orders WHERE id = $1', [id]);
+    if (!rows.length) return null;
+    const items = await query('SELECT * FROM order_items WHERE order_id = $1 ORDER BY id', [id]);
+    return rowToOrder(rows[0], items.rows.map(rowToItem));
+  },
+
+  async listOrders(limit = 500) {
+    const { rows } = await query(
+      'SELECT * FROM orders ORDER BY created_at DESC LIMIT $1',
+      [Math.min(limit, 2000)]
+    );
+    const byOrder = await itemsFor(rows.map(r => r.id));
+    return rows.map(r => rowToOrder(r, byOrder.get(r.id) || []));
+  },
+
+  async updateOrder(id, { status, paymentStatus }) {
+    const { rows } = await query(
+      `UPDATE orders
+          SET status         = COALESCE($2, status),
+              payment_status = COALESCE($3, payment_status),
+              updated_at     = now()
+        WHERE id = $1
+        RETURNING id`,
+      [id, status === undefined ? null : status, paymentStatus === undefined ? null : paymentStatus]
+    );
+    if (!rows.length) return null;
     return module.exports.getOrder(id);
   },
 
-  // Both anti-spam counters now come from the database, so they survive a
-  // restart instead of resetting the moment the server is redeployed.
-  countUnpaidForSession(sessionId) {
-    return stmts.countUnpaidForSession.get(sessionId).n;
-  },
-
-  countRecentOrdersForIp(ip, windowMs) {
-    const since = new Date(Date.now() - windowMs).toISOString();
-    return stmts.countRecentForIp.get(ip, since).n;
-  },
-
   // -----------------------------------------------------------
-  // Menu availability (sold-out toggles)
+  // Anti-spam counters, derived from the data rather than memory
   // -----------------------------------------------------------
-  unavailableIds() {
-    return new Set(stmts.listUnavailable.all().map(r => r.menu_item_id));
+  async countUnpaidForSession(sessionId) {
+    const { rows } = await query(
+      `SELECT COUNT(*)::int AS n FROM orders
+        WHERE session_id = $1 AND payment_status = 'pending' AND status <> 'cancelled'`,
+      [sessionId]
+    );
+    return rows[0].n;
   },
 
-  setAvailability(menuItemId, available) {
-    stmts.setAvailability.run({
-      id: menuItemId,
-      available: available ? 1 : 0,
-      updatedAt: new Date().toISOString()
-    });
+  async countRecentOrdersForIp(ip, windowMs) {
+    const { rows } = await query(
+      `SELECT COUNT(*)::int AS n FROM orders
+        WHERE ip_address = $1 AND created_at >= now() - ($2::bigint * interval '1 millisecond')`,
+      [ip, windowMs]
+    );
+    return rows[0].n;
   },
 
   // -----------------------------------------------------------
-  // Order history search
-  //
-  // Filters are composed into one WHERE clause with bound parameters - never
-  // string-interpolated - so a search term cannot alter the query.
+  // Menu availability
   // -----------------------------------------------------------
-  searchOrders({ from, to, status, q, limit = 50, offset = 0 } = {}) {
+  async unavailableIds() {
+    const { rows } = await query(
+      'SELECT menu_item_id FROM menu_availability WHERE available = false'
+    );
+    return new Set(rows.map(r => r.menu_item_id));
+  },
+
+  async setAvailability(menuItemId, available) {
+    await query(
+      `INSERT INTO menu_availability (menu_item_id, available, updated_at)
+       VALUES ($1, $2, now())
+       ON CONFLICT (menu_item_id)
+       DO UPDATE SET available = EXCLUDED.available, updated_at = now()`,
+      [menuItemId, !!available]
+    );
+  },
+
+  // -----------------------------------------------------------
+  // History search. Filters are bound parameters, never interpolated.
+  // -----------------------------------------------------------
+  async searchOrders({ from, to, status, q, limit = 50, offset = 0 } = {}) {
     const where = [];
-    const params = {};
+    const params = [];
 
-    if (from) { where.push('created_at >= @from'); params.from = from + 'T00:00:00.000Z'; }
-    if (to) { where.push('created_at <= @to'); params.to = to + 'T23:59:59.999Z'; }
-    if (status) { where.push('status = @status'); params.status = status; }
-    if (q) {
-      where.push('(id LIKE @q OR customer_name LIKE @q OR phone LIKE @q)');
-      params.q = '%' + q + '%';
-    }
+    if (from) { params.push(from); where.push(`created_at >= $${params.length}::date`); }
+    if (to) { params.push(to); where.push(`created_at < ($${params.length}::date + interval '1 day')`); }
+    if (status) { params.push(status); where.push(`status = $${params.length}`); }
+    if (q) { params.push('%' + q + '%'); where.push(`(id ILIKE $${params.length} OR customer_name ILIKE $${params.length} OR phone ILIKE $${params.length})`); }
 
     const clause = where.length ? 'WHERE ' + where.join(' AND ') : '';
     const paidClause = 'WHERE ' + where.concat("payment_status = 'paid'").join(' AND ');
 
-    const total = db.prepare(`SELECT COUNT(*) AS n FROM orders ${clause}`).get(params).n;
-    const revenue = db.prepare(
-      `SELECT COALESCE(SUM(total), 0) AS sum FROM orders ${paidClause}`
-    ).get(params).sum;
+    const totals = await query(
+      `SELECT (SELECT COUNT(*)::int FROM orders ${clause}) AS total,
+              (SELECT COALESCE(SUM(total), 0) FROM orders ${paidClause}) AS revenue`,
+      params
+    );
 
-    const rows = db.prepare(
-      `SELECT * FROM orders ${clause} ORDER BY created_at DESC LIMIT @limit OFFSET @offset`
-    ).all(Object.assign({}, params, { limit: Math.min(limit, 500), offset }));
+    const pageParams = params.concat([Math.min(limit, 500), offset]);
+    const { rows } = await query(
+      `SELECT * FROM orders ${clause}
+        ORDER BY created_at DESC
+        LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+      pageParams
+    );
 
-    const ids = rows.map(r => r.id);
-    const byOrder = new Map();
-    if (ids.length) {
-      const placeholders = ids.map(() => '?').join(',');
-      for (const item of db.prepare(
-        `SELECT * FROM order_items WHERE order_id IN (${placeholders}) ORDER BY id`
-      ).all(...ids)) {
-        if (!byOrder.has(item.order_id)) byOrder.set(item.order_id, []);
-        byOrder.get(item.order_id).push(rowToItem(item));
-      }
-    }
+    const byOrder = await itemsFor(rows.map(r => r.id));
 
     return {
-      total,
-      revenue: Math.round(revenue * 100) / 100,
-      orders: rows.map(row => rowToOrder(row, byOrder.get(row.id) || []))
+      total: totals.rows[0].total,
+      revenue: Math.round(Number(totals.rows[0].revenue) * 100) / 100,
+      orders: rows.map(r => rowToOrder(r, byOrder.get(r.id) || []))
     };
   },
 
-  salesByDay(days = 30) {
-    return stmts.salesByDay.all(days);
+  // -----------------------------------------------------------
+  // Reporting
+  // -----------------------------------------------------------
+  async salesByDay(days = 30) {
+    const { rows } = await query(
+      `SELECT to_char(created_at, 'YYYY-MM-DD') AS day,
+              COUNT(*)::int AS orders,
+              SUM(total) AS revenue
+         FROM orders
+        WHERE payment_status = 'paid' AND status = 'completed'
+        GROUP BY day
+        ORDER BY day DESC
+        LIMIT $1`,
+      [days]
+    );
+    return rows.map(r => ({ day: r.day, orders: r.orders, revenue: Number(r.revenue) }));
   },
 
-  topDrinks(limit = 20) {
-    return stmts.topDrinks.all(limit);
+  async topDrinks(limit = 20) {
+    const { rows } = await query(
+      `SELECT oi.name,
+              SUM(oi.quantity)::int AS sold,
+              SUM(oi.price * oi.quantity) AS revenue
+         FROM order_items oi
+         JOIN orders o ON o.id = oi.order_id
+        WHERE o.status = 'completed'
+        GROUP BY oi.name
+        ORDER BY sold DESC
+        LIMIT $1`,
+      [limit]
+    );
+    return rows.map(r => ({ name: r.name, sold: r.sold, revenue: Number(r.revenue) }));
   },
 
-  // One-time import of the old JSON file so nothing from before is lost.
-  importLegacyJson(jsonPath) {
-    if (!fs.existsSync(jsonPath)) return 0;
-    let parsed;
-    try {
-      parsed = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
-    } catch (err) {
-      console.error('Legacy orders file is unreadable, skipping import:', err.message);
-      return 0;
-    }
-    if (!Array.isArray(parsed) || !parsed.length) return 0;
-
-    let imported = 0;
-    for (const order of parsed) {
-      if (!order || !order.id || stmts.getOrder.get(order.id)) continue;
-      try {
-        insertOrderTx(Object.assign({ items: [], notes: '' }, order));
-        imported++;
-      } catch (err) {
-        console.error(`Could not import order ${order.id}:`, err.message);
-      }
-    }
-    if (imported) {
-      fs.renameSync(jsonPath, jsonPath + '.imported');
-      console.log(`Imported ${imported} order(s) from the old JSON store.`);
-    }
-    return imported;
-  },
-
-  close() {
-    db.close();
+  async close() {
+    await pool.end();
   }
 };

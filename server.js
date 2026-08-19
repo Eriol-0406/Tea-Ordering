@@ -442,13 +442,8 @@ const BOBA_CATEGORIES = ['Milk Tea', 'Fruit Tea', 'Pure Tea', 'Smoothie'];
 // -------------------------------------------------------------
 const store = require('./db');
 
-// Anything written by the previous JSON-file version is pulled in once, then
-// that file is renamed to .imported so it is never re-read.
-store.importLegacyJson(path.join(__dirname, 'data', 'orders.json'));
-console.log(`Order database ready: ${store.file}`);
-
 function shutdown(signal) {
-  try { store.close(); } catch (err) { /* already closed */ }
+  store.close().catch(() => {});
   console.log(`${signal} received - database closed. Bye.`);
   process.exit(0);
 }
@@ -597,7 +592,7 @@ function resolveZone(lat, lng) {
   return best;
 }
 
-function getSpamRisk(distance, ip, sessionId, zoneName) {
+async function getSpamRisk(distance, ip, sessionId, zoneName) {
   let riskLevel = 'Safe';
   let reason = zoneName ? `Verified inside ${zoneName}` : 'Location verified within range';
 
@@ -609,12 +604,12 @@ function getSpamRisk(distance, ip, sessionId, zoneName) {
     reason = `Outside every ordering zone (${distance} km from shop)`;
   }
 
-  if (store.countRecentOrdersForIp(ip, RATE_WINDOW_MS) >= 2) {
+  if (await store.countRecentOrdersForIp(ip, RATE_WINDOW_MS) >= 2) {
     riskLevel = 'High Risk';
     reason += ' + Multiple rapid orders from same IP';
   }
 
-  if (store.countUnpaidForSession(sessionId) >= 1) {
+  if (await store.countUnpaidForSession(sessionId) >= 1) {
     riskLevel = 'High Risk';
     reason += ' + Has an unpaid outstanding order';
   }
@@ -657,9 +652,11 @@ function trackingView(order) {
 // -------------------------------------------------------------
 
 // 1. Get restaurant menu, annotated with what is currently sold out
-app.get('/api/menu', (req, res) => {
-  const soldOut = store.unavailableIds();
+app.get('/api/menu', async (req, res, next) => {
+  try {
+  const soldOut = await store.unavailableIds();
   res.json(menuItems.map(item => Object.assign({}, item, { available: !soldOut.has(item.id) })));
+  } catch (err) { next(err); }
 });
 
 // 1b. Public runtime config for the customer app
@@ -683,7 +680,8 @@ app.get('/api/config', (req, res) => {
 });
 
 // 2. Place an order
-app.post('/api/orders', (req, res) => {
+app.post('/api/orders', async (req, res, next) => {
+  try {
   const { items, paymentMethod, location } = req.body || {};
   const ipAddress = req.ip || req.socket.remoteAddress;
 
@@ -706,14 +704,14 @@ app.post('/api/orders', (req, res) => {
   }
 
   // IP Rate Limit Check (counted from the database, so restarts do not reset it)
-  if (store.countRecentOrdersForIp(ipAddress, RATE_WINDOW_MS) >= MAX_ORDERS_PER_WINDOW) {
+  if (await store.countRecentOrdersForIp(ipAddress, RATE_WINDOW_MS) >= MAX_ORDERS_PER_WINDOW) {
     return res.status(429).json({
       error: "Too many orders placed. To prevent spam, ordering is locked for 15 minutes."
     });
   }
 
   // Calculate order items and total price securely
-  const soldOutIds = store.unavailableIds();
+  const soldOutIds = await store.unavailableIds();
   let total = 0;
   const enrichedItems = [];
 
@@ -846,7 +844,7 @@ app.post('/api/orders', (req, res) => {
   }
 
   // Session unpaid order check
-  if (!paymentGuaranteed && store.countUnpaidForSession(sessionId) >= 2) {
+  if (!paymentGuaranteed && await store.countUnpaidForSession(sessionId) >= 2) {
     return res.status(403).json({
       error: "Ordering is paused for this session due to multiple unpaid outstanding orders. Please settle them at the counter first."
     });
@@ -854,7 +852,7 @@ app.post('/api/orders', (req, res) => {
 
   // Evaluate final risk score
   const zoneName = matchedZone ? matchedZone.name : null;
-  const { riskLevel, reason } = getSpamRisk(distance, ipAddress, sessionId, zoneName);
+  const { riskLevel, reason } = await getSpamRisk(distance, ipAddress, sessionId, zoneName);
 
   const newOrder = {
     id: 'ORD-' + crypto.randomInt(100000, 1000000),
@@ -879,40 +877,49 @@ app.post('/api/orders', (req, res) => {
     createdAt: new Date().toISOString()
   };
 
-  store.saveOrder(newOrder);
+  await store.saveOrder(newOrder);
 
   res.status(201).json({
     success: true,
     orderId: newOrder.id,
     order: customerView(newOrder)
   });
+  } catch (err) { next(err); }
 });
 
 // 3. Track customer order status
-app.get('/api/orders/:id', (req, res) => {
-  const order = store.getOrder(req.params.id);
-  if (!order) {
-    return res.status(404).json({ error: "Order not found" });
-  }
-  res.json(trackingView(order));
+app.get('/api/orders/:id', async (req, res, next) => {
+  try {
+    const order = await store.getOrder(req.params.id);
+    if (!order) {
+      return res.status(404).json({ error: "Order not found" });
+    }
+    res.json(trackingView(order));
+  } catch (err) { next(err); }
 });
 
 // 4. Admin fetch all orders
-app.get('/api/admin/orders', requireAdmin, (req, res) => {
-  const limit = Math.min(parseInt(req.query.limit, 10) || 500, 2000);
-  res.json(store.listOrders(limit));
+app.get('/api/admin/orders', requireAdmin, async (req, res, next) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit, 10) || 500, 2000);
+    res.json(await store.listOrders(limit));
+  } catch (err) { next(err); }
 });
 
 // 4b. Admin sales reporting, straight out of the order tables
-app.get('/api/admin/reports', requireAdmin, (req, res) => {
-  res.json({
-    salesByDay: store.salesByDay(30),
-    topDrinks: store.topDrinks(20)
-  });
+app.get('/api/admin/reports', requireAdmin, async (req, res, next) => {
+  try {
+    const [salesByDay, topDrinks] = await Promise.all([
+      store.salesByDay(30),
+      store.topDrinks(20)
+    ]);
+    res.json({ salesByDay, topDrinks });
+  } catch (err) { next(err); }
 });
 
 // 4c. Admin: order history with filters
-app.get('/api/admin/history', requireAdmin, (req, res) => {
+app.get('/api/admin/history', requireAdmin, async (req, res, next) => {
+  try {
   const { from, to, status, q } = req.query;
   const limit = Math.min(parseInt(req.query.limit, 10) || 50, 500);
   const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
@@ -922,7 +929,7 @@ app.get('/api/admin/history', requireAdmin, (req, res) => {
     return res.status(400).json({ error: 'Invalid status filter' });
   }
 
-  res.json(store.searchOrders({
+  res.json(await store.searchOrders({
     from: cleanText(from, 10) || null,
     to: cleanText(to, 10) || null,
     status: status || null,
@@ -930,12 +937,14 @@ app.get('/api/admin/history', requireAdmin, (req, res) => {
     limit,
     offset
   }));
+  } catch (err) { next(err); }
 });
 
 // 4d. Admin: same query as a CSV download for spreadsheets/accounting
-app.get('/api/admin/history.csv', requireAdmin, (req, res) => {
+app.get('/api/admin/history.csv', requireAdmin, async (req, res, next) => {
+  try {
   const { from, to, status, q } = req.query;
-  const result = store.searchOrders({
+  const result = await store.searchOrders({
     from: cleanText(from, 10) || null,
     to: cleanText(to, 10) || null,
     status: status || null,
@@ -967,10 +976,12 @@ app.get('/api/admin/history.csv', requireAdmin, (req, res) => {
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename="orders-${stamp}.csv"`);
   res.send('\uFEFF' + csv); // BOM so Excel reads the Chinese drink names correctly
+  } catch (err) { next(err); }
 });
 
 // 4e. Admin: mark a drink sold out / back in stock
-app.post('/api/admin/menu/:id/availability', requireAdmin, (req, res) => {
+app.post('/api/admin/menu/:id/availability', requireAdmin, async (req, res, next) => {
+  try {
   const id = parseInt(req.params.id, 10);
   const item = menuItems.find(m => m.id === id);
   if (!item) {
@@ -980,15 +991,17 @@ app.post('/api/admin/menu/:id/availability', requireAdmin, (req, res) => {
     return res.status(400).json({ error: 'available must be true or false' });
   }
 
-  store.setAvailability(id, req.body.available);
+  await store.setAvailability(id, req.body.available);
 
   res.json({ success: true, id, available: req.body.available });
+  } catch (err) { next(err); }
 });
 
 // 5. Admin update status
-app.post('/api/admin/orders/:id/status', requireAdmin, (req, res) => {
+app.post('/api/admin/orders/:id/status', requireAdmin, async (req, res, next) => {
+  try {
   const { status } = req.body || {};
-  const existing = store.getOrder(req.params.id);
+  const existing = await store.getOrder(req.params.id);
 
   if (!existing) {
     return res.status(404).json({ error: "Order not found" });
@@ -1005,20 +1018,23 @@ app.post('/api/admin/orders/:id/status', requireAdmin, (req, res) => {
     ? 'paid'
     : undefined;
 
-  const order = store.updateOrder(req.params.id, { status, paymentStatus });
+  const order = await store.updateOrder(req.params.id, { status, paymentStatus });
   res.json({ success: true, order });
+  } catch (err) { next(err); }
 });
 
 // 6. Admin mark order as paid (staff confirmed cash / transfer received)
-app.post('/api/admin/orders/:id/pay', requireAdmin, (req, res) => {
-  const existing = store.getOrder(req.params.id);
+app.post('/api/admin/orders/:id/pay', requireAdmin, async (req, res, next) => {
+  try {
+  const existing = await store.getOrder(req.params.id);
 
   if (!existing) {
     return res.status(404).json({ error: "Order not found" });
   }
 
-  const order = store.updateOrder(req.params.id, { paymentStatus: 'paid' });
+  const order = await store.updateOrder(req.params.id, { paymentStatus: 'paid' });
   res.json({ success: true, order });
+  } catch (err) { next(err); }
 });
 
 // 7. Payment gateway webhook (stub).
@@ -1030,6 +1046,18 @@ app.post('/api/payments/webhook', (req, res) => {
     return res.status(501).json({ error: 'No payment gateway is configured.' });
   }
   return res.status(501).json({ error: 'Gateway webhook handler not implemented yet.' });
+});
+
+// -------------------------------------------------------------
+// Error handling
+//
+// Database errors can carry connection details in their message, so the client
+// only ever sees a generic failure. The real error goes to the server log.
+// -------------------------------------------------------------
+app.use((err, req, res, next) => {
+  console.error(`Unhandled error on ${req.method} ${req.path}:`, err.message);
+  if (res.headersSent) return next(err);
+  res.status(500).json({ error: 'Something went wrong on our side. Please try again.' });
 });
 
 // -------------------------------------------------------------
