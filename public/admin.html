@@ -45,7 +45,10 @@
         <span>📊</span> Dashboard
       </a>
       <a href="#" class="admin-nav-item" data-view="menu" onclick="showView('menu'); return false;">
-        <span>🍵</span> Menu Stock
+        <span>🍵</span> Menu
+      </a>
+      <a href="#" class="admin-nav-item" data-view="modifiers" onclick="showView('modifiers'); return false;">
+        <span>🧋</span> Modifiers
       </a>
       <a href="#" class="admin-nav-item" data-view="history" onclick="showView('history'); return false;">
         <span>📜</span> Order History
@@ -151,19 +154,42 @@
 
     </div><!-- /view-dashboard -->
 
-    <!-- ========== MENU STOCK VIEW ========== -->
+    <!-- ========== MENU VIEW ========== -->
     <div class="admin-view" id="view-menu" style="display:none;">
-      <section class="admin-orders-list-panel" style="max-width:900px;">
+      <section class="admin-orders-list-panel">
         <div class="panel-title-row">
-          <h3 style="font-size: 1.1rem;">Menu Stock</h3>
-          <button class="btn btn-secondary" onclick="loadMenuStock()" style="padding:0.5rem 1rem; font-size:0.85rem;">🔄 Refresh</button>
+          <h3 style="font-size: 1.1rem;">Menu</h3>
+          <div style="display:flex; gap:0.5rem;">
+            <button class="btn btn-secondary" onclick="loadMenuAdmin()" style="padding:0.5rem 1rem; font-size:0.85rem;">🔄 Refresh</button>
+            <button class="btn btn-primary" onclick="openItemEditor()" style="padding:0.5rem 1rem; font-size:0.85rem;">+ New Drink</button>
+          </div>
         </div>
         <p style="font-size:0.8rem; color:var(--text-secondary); margin-bottom:0.75rem;">
-          Switch a drink off when you run out. It greys out on the customer menu
-          straight away and cannot be ordered.
+          Edit names, prices and sizes, or switch a drink off when you run out.
+          Changes reach the customer menu within a few seconds.
         </p>
-        <div class="admin-orders-scroll" id="menuStockList">
+        <div class="admin-orders-scroll" id="menuAdminList">
           <div style="text-align:center; color:var(--text-secondary); padding:3rem;">Loading menu...</div>
+        </div>
+      </section>
+    </div>
+
+    <!-- ========== MODIFIERS VIEW ========== -->
+    <div class="admin-view" id="view-modifiers" style="display:none;">
+      <section class="admin-orders-list-panel">
+        <div class="panel-title-row">
+          <h3 style="font-size: 1.1rem;">Modifiers</h3>
+          <div style="display:flex; gap:0.5rem;">
+            <button class="btn btn-secondary" onclick="loadMenuAdmin()" style="padding:0.5rem 1rem; font-size:0.85rem;">🔄 Refresh</button>
+            <button class="btn btn-primary" onclick="openGroupEditor()" style="padding:0.5rem 1rem; font-size:0.85rem;">+ New Group</button>
+          </div>
+        </div>
+        <p style="font-size:0.8rem; color:var(--text-secondary); margin-bottom:0.75rem;">
+          Ice level, sugar level, add-ons and upgrades. A group can apply to whole
+          categories, or to individual drinks.
+        </p>
+        <div class="admin-orders-scroll" id="modifierAdminList">
+          <div style="text-align:center; color:var(--text-secondary); padding:3rem;">Loading modifiers...</div>
         </div>
       </section>
     </div>
@@ -213,6 +239,22 @@
 
   </main>
 
+  </div>
+
+  <!-- Editor dialog, shared by the menu and modifier screens -->
+  <div class="admin-dialog-overlay" id="adminDialog" style="display:none;">
+    <div class="admin-dialog glass-panel">
+      <div class="admin-dialog-head">
+        <h3 id="adminDialogTitle">Edit</h3>
+        <button class="sheet-close" onclick="closeAdminDialog()">✕</button>
+      </div>
+      <div id="adminDialogBody"></div>
+      <div class="admin-dialog-actions">
+        <button class="btn btn-secondary" onclick="closeAdminDialog()">Cancel</button>
+        <button class="btn btn-primary" id="adminDialogSave" onclick="submitAdminDialog()">Save</button>
+      </div>
+      <div id="adminDialogError" class="admin-login-error" style="display:none;"></div>
+    </div>
   </div>
 
   <!-- Socket.io Script and Leaflet.js Scripts -->

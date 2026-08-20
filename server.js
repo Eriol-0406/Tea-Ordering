@@ -693,6 +693,209 @@ app.post('/api/admin/menu/:id/availability', requireAdmin, async (req, res, next
   } catch (err) { next(err); }
 });
 
+// ---------------------------------------------------------------
+// Menu administration
+// ---------------------------------------------------------------
+const PRICE_MAX = 999.99;
+
+function readPrice(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0 || n > PRICE_MAX) return null;
+  return Math.round(n * 100) / 100;
+}
+
+// Everything staff need to edit, including hidden items.
+app.get('/api/admin/menu', requireAdmin, async (req, res, next) => {
+  try {
+    const [menu, categories, modifiers] = await Promise.all([
+      store.getMenu({ includeInactive: true }),
+      store.listCategories(),
+      store.listModifiers()
+    ]);
+    res.json({ menu, categories, modifiers });
+  } catch (err) { next(err); }
+});
+
+app.post('/api/admin/menu/items', requireAdmin, async (req, res, next) => {
+  try {
+    const name = cleanText(req.body?.name, 120);
+    const description = cleanText(req.body?.description, 400);
+    const imageUrl = cleanText(req.body?.imageUrl, 300);
+    const categoryId = parseInt(req.body?.categoryId, 10);
+    const variants = Array.isArray(req.body?.variants) ? req.body.variants : [];
+
+    if (!name) return res.status(400).json({ error: 'A drink name is required' });
+    if (!Number.isInteger(categoryId)) return res.status(400).json({ error: 'Choose a category' });
+    if (!variants.length) return res.status(400).json({ error: 'Add at least one size or type' });
+
+    const clean = [];
+    for (const v of variants) {
+      const vName = cleanText(v.name, 80);
+      const price = readPrice(v.price);
+      if (!vName) return res.status(400).json({ error: 'Every size needs a name' });
+      if (price === null) return res.status(400).json({ error: `Invalid price for "${vName}"` });
+      clean.push({ name: vName, price });
+    }
+
+    const id = await store.createItem({ categoryId, name, description, imageUrl, variants: clean });
+    invalidateMenuCache();
+    res.status(201).json({ success: true, id });
+  } catch (err) { next(err); }
+});
+
+app.patch('/api/admin/menu/items/:id', requireAdmin, async (req, res, next) => {
+  try {
+    const fields = {};
+    if (req.body?.name !== undefined) fields.name = cleanText(req.body.name, 120);
+    if (req.body?.description !== undefined) fields.description = cleanText(req.body.description, 400);
+    if (req.body?.imageUrl !== undefined) fields.imageUrl = cleanText(req.body.imageUrl, 300) || null;
+    if (req.body?.categoryId !== undefined) fields.categoryId = parseInt(req.body.categoryId, 10);
+    if (req.body?.isActive !== undefined) fields.isActive = !!req.body.isActive;
+
+    if (fields.name === '') return res.status(400).json({ error: 'A drink name is required' });
+
+    const ok = await store.updateItem(parseInt(req.params.id, 10), fields);
+    if (!ok) return res.status(404).json({ error: 'Menu item not found' });
+    invalidateMenuCache();
+    res.json({ success: true });
+  } catch (err) { next(err); }
+});
+
+app.delete('/api/admin/menu/items/:id', requireAdmin, async (req, res, next) => {
+  try {
+    const result = await store.deleteItem(parseInt(req.params.id, 10));
+    invalidateMenuCache();
+    res.json(Object.assign({ success: true }, result));
+  } catch (err) { next(err); }
+});
+
+app.post('/api/admin/menu/items/:id/variants', requireAdmin, async (req, res, next) => {
+  try {
+    const name = cleanText(req.body?.name, 80);
+    const price = readPrice(req.body?.price);
+    if (!name) return res.status(400).json({ error: 'A size name is required' });
+    if (price === null) return res.status(400).json({ error: 'Invalid price' });
+    const id = await store.addVariant(parseInt(req.params.id, 10), { name, price });
+    invalidateMenuCache();
+    res.status(201).json({ success: true, id });
+  } catch (err) { next(err); }
+});
+
+app.patch('/api/admin/menu/variants/:id', requireAdmin, async (req, res, next) => {
+  try {
+    const fields = {};
+    if (req.body?.name !== undefined) fields.name = cleanText(req.body.name, 80);
+    if (req.body?.price !== undefined) {
+      fields.price = readPrice(req.body.price);
+      if (fields.price === null) return res.status(400).json({ error: 'Invalid price' });
+    }
+    if (req.body?.isActive !== undefined) fields.isActive = !!req.body.isActive;
+    const ok = await store.updateVariant(parseInt(req.params.id, 10), fields);
+    if (!ok) return res.status(404).json({ error: 'Size not found' });
+    invalidateMenuCache();
+    res.json({ success: true });
+  } catch (err) { next(err); }
+});
+
+app.delete('/api/admin/menu/variants/:id', requireAdmin, async (req, res, next) => {
+  try {
+    const result = await store.deleteVariant(parseInt(req.params.id, 10));
+    if (result.notFound) return res.status(404).json({ error: 'Size not found' });
+    if (result.lastOne) return res.status(400).json({ error: 'A drink must keep at least one size' });
+    invalidateMenuCache();
+    res.json({ success: true });
+  } catch (err) { next(err); }
+});
+
+// ---- modifier groups and options ----
+app.post('/api/admin/modifiers/groups', requireAdmin, async (req, res, next) => {
+  try {
+    const name = cleanText(req.body?.name, 80);
+    const selection = req.body?.selection === 'multi' ? 'multi' : 'single';
+    if (!name) return res.status(400).json({ error: 'A group name is required' });
+    const id = await store.createGroup({
+      name, nameZh: cleanText(req.body?.nameZh, 40), selection, required: !!req.body?.required
+    });
+    invalidateMenuCache();
+    res.status(201).json({ success: true, id });
+  } catch (err) { next(err); }
+});
+
+app.patch('/api/admin/modifiers/groups/:id', requireAdmin, async (req, res, next) => {
+  try {
+    const fields = {};
+    if (req.body?.name !== undefined) fields.name = cleanText(req.body.name, 80);
+    if (req.body?.nameZh !== undefined) fields.nameZh = cleanText(req.body.nameZh, 40) || null;
+    if (req.body?.selection !== undefined) fields.selection = req.body.selection === 'multi' ? 'multi' : 'single';
+    if (req.body?.required !== undefined) fields.required = !!req.body.required;
+    if (req.body?.isActive !== undefined) fields.isActive = !!req.body.isActive;
+    const ok = await store.updateGroup(parseInt(req.params.id, 10), fields);
+    if (!ok) return res.status(404).json({ error: 'Group not found' });
+    invalidateMenuCache();
+    res.json({ success: true });
+  } catch (err) { next(err); }
+});
+
+app.delete('/api/admin/modifiers/groups/:id', requireAdmin, async (req, res, next) => {
+  try {
+    const ok = await store.deleteGroup(parseInt(req.params.id, 10));
+    if (!ok) return res.status(404).json({ error: 'Group not found' });
+    invalidateMenuCache();
+    res.json({ success: true });
+  } catch (err) { next(err); }
+});
+
+app.post('/api/admin/modifiers/groups/:id/options', requireAdmin, async (req, res, next) => {
+  try {
+    const name = cleanText(req.body?.name, 80);
+    const priceDelta = readPrice(req.body?.priceDelta ?? 0);
+    if (!name) return res.status(400).json({ error: 'An option name is required' });
+    if (priceDelta === null) return res.status(400).json({ error: 'Invalid price' });
+    const id = await store.addOption(parseInt(req.params.id, 10), {
+      name, nameZh: cleanText(req.body?.nameZh, 40), priceDelta, isDefault: !!req.body?.isDefault
+    });
+    invalidateMenuCache();
+    res.status(201).json({ success: true, id });
+  } catch (err) { next(err); }
+});
+
+app.patch('/api/admin/modifiers/options/:id', requireAdmin, async (req, res, next) => {
+  try {
+    const fields = {};
+    if (req.body?.name !== undefined) fields.name = cleanText(req.body.name, 80);
+    if (req.body?.nameZh !== undefined) fields.nameZh = cleanText(req.body.nameZh, 40) || null;
+    if (req.body?.priceDelta !== undefined) {
+      fields.priceDelta = readPrice(req.body.priceDelta);
+      if (fields.priceDelta === null) return res.status(400).json({ error: 'Invalid price' });
+    }
+    if (req.body?.isDefault !== undefined) fields.isDefault = !!req.body.isDefault;
+    if (req.body?.isActive !== undefined) fields.isActive = !!req.body.isActive;
+    const ok = await store.updateOption(parseInt(req.params.id, 10), fields);
+    if (!ok) return res.status(404).json({ error: 'Option not found' });
+    invalidateMenuCache();
+    res.json({ success: true });
+  } catch (err) { next(err); }
+});
+
+app.delete('/api/admin/modifiers/options/:id', requireAdmin, async (req, res, next) => {
+  try {
+    const ok = await store.deleteOption(parseInt(req.params.id, 10));
+    if (!ok) return res.status(404).json({ error: 'Option not found' });
+    invalidateMenuCache();
+    res.json({ success: true });
+  } catch (err) { next(err); }
+});
+
+app.put('/api/admin/modifiers/groups/:id/assignments', requireAdmin, async (req, res, next) => {
+  try {
+    const categoryIds = (req.body?.categoryIds || []).map(Number).filter(Number.isInteger);
+    const itemIds = (req.body?.itemIds || []).map(Number).filter(Number.isInteger);
+    await store.setGroupAssignments(parseInt(req.params.id, 10), { categoryIds, itemIds });
+    invalidateMenuCache();
+    res.json({ success: true });
+  } catch (err) { next(err); }
+});
+
 // 5. Admin update status
 app.post('/api/admin/orders/:id/status', requireAdmin, async (req, res, next) => {
   try {

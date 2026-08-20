@@ -351,6 +351,215 @@ module.exports = {
   },
 
   // -----------------------------------------------------------
+  // Menu administration
+  //
+  // Deleting an item that appears in past orders would leave history pointing
+  // at nothing, so anything already sold is archived (hidden) rather than
+  // removed. Genuinely unused items are deleted outright.
+  // -----------------------------------------------------------
+  async createItem({ categoryId, name, description, imageUrl, variants }) {
+    const client = await getPool().connect();
+    try {
+      await client.query('BEGIN');
+      const { rows } = await client.query(
+        `INSERT INTO menu_items (category_id, name, description, image_url, sort_order)
+         VALUES ($1,$2,$3,$4, COALESCE((SELECT MAX(sort_order)+1 FROM menu_items), 1))
+         RETURNING id`,
+        [categoryId, name, description || '', imageUrl || null]
+      );
+      const id = rows[0].id;
+      for (let i = 0; i < variants.length; i++) {
+        await client.query(
+          `INSERT INTO menu_variants (item_id, name, price, sort_order) VALUES ($1,$2,$3,$4)`,
+          [id, variants[i].name, variants[i].price, i + 1]
+        );
+      }
+      await client.query('COMMIT');
+      return id;
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+  },
+
+  async updateItem(id, fields) {
+    const sets = [];
+    const params = [id];
+    const map = {
+      name: 'name', description: 'description', imageUrl: 'image_url',
+      categoryId: 'category_id', isActive: 'is_active', sortOrder: 'sort_order'
+    };
+    for (const [key, column] of Object.entries(map)) {
+      if (fields[key] === undefined) continue;
+      params.push(fields[key]);
+      sets.push(`${column} = $${params.length}`);
+    }
+    if (!sets.length) return false;
+    sets.push('updated_at = now()');
+    const { rowCount } = await query(
+      `UPDATE menu_items SET ${sets.join(', ')} WHERE id = $1`, params
+    );
+    return rowCount > 0;
+  },
+
+  async deleteItem(id) {
+    const used = await query(
+      'SELECT 1 FROM order_items WHERE menu_item_id = $1 LIMIT 1', [id]
+    );
+    if (used.rowCount) {
+      await query('UPDATE menu_items SET is_active = false, updated_at = now() WHERE id = $1', [id]);
+      return { archived: true };
+    }
+    const { rowCount } = await query('DELETE FROM menu_items WHERE id = $1', [id]);
+    return { deleted: rowCount > 0 };
+  },
+
+  async addVariant(itemId, { name, price }) {
+    const { rows } = await query(
+      `INSERT INTO menu_variants (item_id, name, price, sort_order)
+       VALUES ($1,$2,$3, COALESCE((SELECT MAX(sort_order)+1 FROM menu_variants WHERE item_id = $1), 1))
+       RETURNING id`,
+      [itemId, name, price]
+    );
+    return rows[0].id;
+  },
+
+  async updateVariant(id, { name, price, isActive }) {
+    const sets = [];
+    const params = [id];
+    if (name !== undefined) { params.push(name); sets.push(`name = $${params.length}`); }
+    if (price !== undefined) { params.push(price); sets.push(`price = $${params.length}`); }
+    if (isActive !== undefined) { params.push(isActive); sets.push(`is_active = $${params.length}`); }
+    if (!sets.length) return false;
+    const { rowCount } = await query(`UPDATE menu_variants SET ${sets.join(', ')} WHERE id = $1`, params);
+    return rowCount > 0;
+  },
+
+  async deleteVariant(id) {
+    // A drink must keep at least one size, or it becomes unorderable.
+    const { rows } = await query(
+      `SELECT item_id, (SELECT COUNT(*)::int FROM menu_variants v2
+                         WHERE v2.item_id = v.item_id AND v2.is_active) AS siblings
+         FROM menu_variants v WHERE id = $1`, [id]
+    );
+    if (!rows.length) return { notFound: true };
+    if (rows[0].siblings <= 1) return { lastOne: true };
+    await query('DELETE FROM menu_variants WHERE id = $1', [id]);
+    return { deleted: true };
+  },
+
+  // ---- modifier groups ----
+  async listModifiers() {
+    const [groups, options, catLinks, itemLinks] = await Promise.all([
+      query('SELECT * FROM modifier_groups ORDER BY sort_order, id'),
+      query('SELECT * FROM modifier_options ORDER BY group_id, sort_order, id'),
+      query('SELECT * FROM category_modifier_groups'),
+      query('SELECT * FROM item_modifier_groups')
+    ]);
+
+    return groups.rows.map(g => ({
+      id: g.id,
+      name: g.name,
+      nameZh: g.name_zh,
+      selection: g.selection,
+      required: g.is_required,
+      sortOrder: g.sort_order,
+      isActive: g.is_active,
+      options: options.rows.filter(o => o.group_id === g.id).map(o => ({
+        id: o.id, name: o.name, nameZh: o.name_zh,
+        priceDelta: Number(o.price_delta), isDefault: o.is_default, isActive: o.is_active
+      })),
+      categoryIds: catLinks.rows.filter(l => l.group_id === g.id).map(l => l.category_id),
+      itemIds: itemLinks.rows.filter(l => l.group_id === g.id).map(l => l.item_id)
+    }));
+  },
+
+  async createGroup({ name, nameZh, selection, required }) {
+    const { rows } = await query(
+      `INSERT INTO modifier_groups (name, name_zh, selection, is_required, sort_order)
+       VALUES ($1,$2,$3,$4, COALESCE((SELECT MAX(sort_order)+1 FROM modifier_groups), 1))
+       RETURNING id`,
+      [name, nameZh || null, selection, !!required]
+    );
+    return rows[0].id;
+  },
+
+  async updateGroup(id, fields) {
+    const sets = [];
+    const params = [id];
+    const map = { name: 'name', nameZh: 'name_zh', selection: 'selection',
+                  required: 'is_required', isActive: 'is_active', sortOrder: 'sort_order' };
+    for (const [key, column] of Object.entries(map)) {
+      if (fields[key] === undefined) continue;
+      params.push(fields[key]);
+      sets.push(`${column} = $${params.length}`);
+    }
+    if (!sets.length) return false;
+    const { rowCount } = await query(`UPDATE modifier_groups SET ${sets.join(', ')} WHERE id = $1`, params);
+    return rowCount > 0;
+  },
+
+  async deleteGroup(id) {
+    const { rowCount } = await query('DELETE FROM modifier_groups WHERE id = $1', [id]);
+    return rowCount > 0;
+  },
+
+  async addOption(groupId, { name, nameZh, priceDelta, isDefault }) {
+    const { rows } = await query(
+      `INSERT INTO modifier_options (group_id, name, name_zh, price_delta, is_default, sort_order)
+       VALUES ($1,$2,$3,$4,$5, COALESCE((SELECT MAX(sort_order)+1 FROM modifier_options WHERE group_id = $1), 1))
+       RETURNING id`,
+      [groupId, name, nameZh || null, priceDelta || 0, !!isDefault]
+    );
+    return rows[0].id;
+  },
+
+  async updateOption(id, fields) {
+    const sets = [];
+    const params = [id];
+    const map = { name: 'name', nameZh: 'name_zh', priceDelta: 'price_delta',
+                  isDefault: 'is_default', isActive: 'is_active' };
+    for (const [key, column] of Object.entries(map)) {
+      if (fields[key] === undefined) continue;
+      params.push(fields[key]);
+      sets.push(`${column} = $${params.length}`);
+    }
+    if (!sets.length) return false;
+    const { rowCount } = await query(`UPDATE modifier_options SET ${sets.join(', ')} WHERE id = $1`, params);
+    return rowCount > 0;
+  },
+
+  async deleteOption(id) {
+    const { rowCount } = await query('DELETE FROM modifier_options WHERE id = $1', [id]);
+    return rowCount > 0;
+  },
+
+  // Replaces a group's assignments wholesale - simpler to reason about than
+  // diffing, and these lists are tiny.
+  async setGroupAssignments(groupId, { categoryIds = [], itemIds = [] }) {
+    const client = await getPool().connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('DELETE FROM category_modifier_groups WHERE group_id = $1', [groupId]);
+      await client.query('DELETE FROM item_modifier_groups WHERE group_id = $1', [groupId]);
+      for (const cid of categoryIds) {
+        await client.query('INSERT INTO category_modifier_groups (category_id, group_id) VALUES ($1,$2)', [cid, groupId]);
+      }
+      for (const iid of itemIds) {
+        await client.query('INSERT INTO item_modifier_groups (item_id, group_id) VALUES ($1,$2)', [iid, groupId]);
+      }
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+  },
+
+  // -----------------------------------------------------------
   // Menu availability
   // -----------------------------------------------------------
   async unavailableIds() {

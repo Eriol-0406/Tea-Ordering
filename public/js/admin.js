@@ -579,7 +579,7 @@ function showView(name) {
     a.classList.toggle('active', a.dataset.view === name);
   });
 
-  if (name === 'menu') loadMenuStock();
+  if (name === 'menu' || name === 'modifiers') loadMenuAdmin();
   if (name === 'history' && !historyState.loaded) loadHistory(0);
   // Leaflet mis-measures while its panel is hidden, so re-measure on return.
   if (name === 'dashboard' && mapInstance) {
@@ -588,39 +588,61 @@ function showView(name) {
 }
 
 // -------------------------------------------------------------
-// Menu stock (sold-out toggles)
+// Menu editor
 // -------------------------------------------------------------
-async function loadMenuStock() {
-  const box = document.getElementById('menuStockList');
+let menuAdmin = { menu: [], categories: [], modifiers: [] };
+
+async function loadMenuAdmin() {
   try {
-    const res = await fetch('/api/menu');
-    const items = await res.json();
+    const res = await adminFetch('/api/admin/menu');
+    if (!res.ok) throw new Error('Could not load the menu');
+    menuAdmin = await readJsonOrExplain(res);
+    renderMenuAdmin();
+    renderModifierAdmin();
+  } catch (err) {
+    document.getElementById('menuAdminList').innerHTML =
+      `<div style="text-align:center; color:var(--danger); padding:3rem;">${esc(err.message)}</div>`;
+  }
+}
 
-    const byCategory = {};
-    items.forEach(i => {
-      (byCategory[i.category] = byCategory[i.category] || []).push(i);
-    });
+function renderMenuAdmin() {
+  const box = document.getElementById('menuAdminList');
+  const byCategory = new Map();
+  for (const item of menuAdmin.menu) {
+    if (!byCategory.has(item.category)) byCategory.set(item.category, []);
+    byCategory.get(item.category).push(item);
+  }
 
-    box.innerHTML = Object.entries(byCategory).map(([category, list]) => `
+  box.innerHTML = [...byCategory.entries()].map(([category, items]) => {
+    const company = items[0].company;
+    return `
       <div class="stock-group">
-        <div class="stock-group-title">${esc(category)}</div>
-        ${list.map(item => `
-          <div class="stock-row ${item.available === false ? 'is-out' : ''}" id="stock-${item.id}">
+        <div class="stock-group-title">
+          ${esc(category)} <span style="opacity:0.6;">· ${esc(company)}</span>
+        </div>
+        ${items.map(item => `
+          <div class="stock-row ${item.available === false ? 'is-out' : ''} ${item.isActive === false ? 'is-hidden' : ''}">
             <div class="stock-name">
               ${esc(item.name)}
-              <span class="stock-state">${item.available === false ? 'Sold out' : 'Available'}</span>
+              <span class="stock-state">
+                ${item.variants.map(v => esc(v.name) + ' RM' + v.price.toFixed(2)).join(' · ')}
+              </span>
+              <span class="stock-state">
+                ${item.isActive === false ? '⚠️ Hidden from customers · ' : ''}${item.available === false ? 'Sold out' : 'Available'}
+              </span>
             </div>
-            <button class="btn ${item.available === false ? 'btn-success' : 'btn-danger'} stock-btn"
-                    onclick="toggleStock(${item.id}, ${item.available === false})">
-              ${item.available === false ? 'Back in stock' : 'Mark sold out'}
-            </button>
+            <div class="stock-actions">
+              <button class="btn btn-secondary stock-btn" onclick="openItemEditor(${item.id})">Edit</button>
+              <button class="btn ${item.available === false ? 'btn-success' : 'btn-danger'} stock-btn"
+                      onclick="toggleStock(${item.id}, ${item.available === false})">
+                ${item.available === false ? 'In stock' : 'Sold out'}
+              </button>
+            </div>
           </div>
         `).join('')}
       </div>
-    `).join('');
-  } catch (err) {
-    box.innerHTML = `<div style="text-align:center; color:var(--danger); padding:3rem;">Could not load the menu.</div>`;
-  }
+    `;
+  }).join('');
 }
 
 async function toggleStock(id, makeAvailable) {
@@ -631,10 +653,306 @@ async function toggleStock(id, makeAvailable) {
       body: JSON.stringify({ available: makeAvailable })
     });
     if (!res.ok) throw new Error('Update failed');
-    loadMenuStock();
+    loadMenuAdmin();
   } catch (err) {
     alert(`Could not update stock: ${err.message}`);
   }
+}
+
+// -------------------------------------------------------------
+// Shared editor dialog
+// -------------------------------------------------------------
+let dialogSubmit = null;
+
+function openAdminDialog(title, bodyHtml, onSubmit) {
+  document.getElementById('adminDialogTitle').innerText = title;
+  document.getElementById('adminDialogBody').innerHTML = bodyHtml;
+  document.getElementById('adminDialogError').style.display = 'none';
+  document.getElementById('adminDialog').style.display = 'flex';
+  dialogSubmit = onSubmit;
+}
+
+function closeAdminDialog() {
+  document.getElementById('adminDialog').style.display = 'none';
+  dialogSubmit = null;
+}
+
+function dialogError(message) {
+  const box = document.getElementById('adminDialogError');
+  box.innerText = message;
+  box.style.display = 'block';
+}
+
+async function submitAdminDialog() {
+  if (!dialogSubmit) return;
+  const button = document.getElementById('adminDialogSave');
+  button.disabled = true;
+  try {
+    await dialogSubmit();
+    closeAdminDialog();
+    loadMenuAdmin();
+  } catch (err) {
+    dialogError(err.message);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function field(label, id, value, type) {
+  return `<label class="dialog-field">
+    <span>${esc(label)}</span>
+    <input class="input-field" id="${id}" type="${type || 'text'}" value="${esc(value == null ? '' : value)}">
+  </label>`;
+}
+
+// -------------------------------------------------------------
+// Item editor
+// -------------------------------------------------------------
+function openItemEditor(itemId) {
+  const item = itemId ? menuAdmin.menu.find(i => i.id === itemId) : null;
+
+  const categoryOptions = menuAdmin.categories.map(c =>
+    `<option value="${c.id}" ${item && item.categoryId === c.id ? 'selected' : ''}>${esc(c.name)} (${esc(c.company)})</option>`
+  ).join('');
+
+  const variantRows = (item ? item.variants : [{ name: '', price: '' }]).map((v, i) => `
+    <div class="variant-row" data-variant-id="${v.id || ''}">
+      <input class="input-field" placeholder="Size or type" value="${esc(v.name || '')}" data-v-name>
+      <input class="input-field" placeholder="0.00" type="number" step="0.10" min="0" value="${v.price === '' ? '' : v.price}" data-v-price>
+      <button class="btn btn-danger stock-btn" onclick="this.closest('.variant-row').remove()">✕</button>
+    </div>
+  `).join('');
+
+  openAdminDialog(item ? 'Edit drink' : 'New drink', `
+    ${field('Name', 'dlgName', item ? item.name : '')}
+    ${field('Description', 'dlgDesc', item ? item.description : '')}
+    <label class="dialog-field">
+      <span>Category</span>
+      <select class="input-field" id="dlgCategory">${categoryOptions}</select>
+    </label>
+    ${field('Image path (optional)', 'dlgImage', item ? (item.image || '') : '')}
+    <label class="dialog-field" style="margin-top:0.5rem;">
+      <span>Sizes and prices</span>
+    </label>
+    <div id="dlgVariants">${variantRows}</div>
+    <button class="btn btn-secondary stock-btn" style="margin-top:0.4rem;" onclick="addVariantRow()">+ Add size</button>
+    ${item ? `<label class="dialog-check"><input type="checkbox" id="dlgActive" ${item.isActive !== false ? 'checked' : ''}> Show on the customer menu</label>` : ''}
+    ${item ? `<button class="btn btn-danger" style="width:100%; margin-top:0.9rem;" onclick="deleteItem(${item.id})">Delete this drink</button>` : ''}
+  `, async () => {
+    const variants = [...document.querySelectorAll('#dlgVariants .variant-row')].map(row => ({
+      id: row.dataset.variantId || null,
+      name: row.querySelector('[data-v-name]').value.trim(),
+      price: row.querySelector('[data-v-price]').value
+    })).filter(v => v.name);
+
+    if (!variants.length) throw new Error('Add at least one size');
+
+    const payload = {
+      name: document.getElementById('dlgName').value.trim(),
+      description: document.getElementById('dlgDesc').value.trim(),
+      categoryId: document.getElementById('dlgCategory').value,
+      imageUrl: document.getElementById('dlgImage').value.trim(),
+      variants
+    };
+    if (!payload.name) throw new Error('A drink name is required');
+
+    if (!item) {
+      await adminJson('/api/admin/menu/items', 'POST', payload);
+      return;
+    }
+
+    const activeBox = document.getElementById('dlgActive');
+    await adminJson(`/api/admin/menu/items/${item.id}`, 'PATCH', {
+      name: payload.name, description: payload.description,
+      categoryId: payload.categoryId, imageUrl: payload.imageUrl,
+      isActive: activeBox ? activeBox.checked : true
+    });
+
+    // Variants are saved individually: existing ones patched, new ones added,
+    // and any the user removed from the form deleted.
+    const kept = new Set();
+    for (const v of variants) {
+      if (v.id) {
+        kept.add(Number(v.id));
+        await adminJson(`/api/admin/menu/variants/${v.id}`, 'PATCH', { name: v.name, price: v.price });
+      } else {
+        await adminJson(`/api/admin/menu/items/${item.id}/variants`, 'POST', { name: v.name, price: v.price });
+      }
+    }
+    for (const original of item.variants) {
+      if (!kept.has(original.id)) {
+        await adminJson(`/api/admin/menu/variants/${original.id}`, 'DELETE');
+      }
+    }
+  });
+}
+
+function addVariantRow() {
+  const row = document.createElement('div');
+  row.className = 'variant-row';
+  row.dataset.variantId = '';
+  row.innerHTML = `
+    <input class="input-field" placeholder="Size or type" data-v-name>
+    <input class="input-field" placeholder="0.00" type="number" step="0.10" min="0" data-v-price>
+    <button class="btn btn-danger stock-btn" onclick="this.closest('.variant-row').remove()">✕</button>`;
+  document.getElementById('dlgVariants').appendChild(row);
+}
+
+async function deleteItem(id) {
+  if (!confirm('Remove this drink from the menu?')) return;
+  try {
+    const res = await adminFetch(`/api/admin/menu/items/${id}`, { method: 'DELETE' });
+    const data = await readJsonOrExplain(res);
+    if (!res.ok) throw new Error(data.error || 'Delete failed');
+    if (data.archived) {
+      alert('This drink has been sold before, so it was hidden rather than deleted. Past orders keep their history.');
+    }
+    closeAdminDialog();
+    loadMenuAdmin();
+  } catch (err) {
+    dialogError(err.message);
+  }
+}
+
+// -------------------------------------------------------------
+// Modifier editor
+// -------------------------------------------------------------
+function renderModifierAdmin() {
+  const box = document.getElementById('modifierAdminList');
+  if (!box) return;
+
+  const categoryName = id => (menuAdmin.categories.find(c => c.id === id) || {}).name || '?';
+  const itemName = id => (menuAdmin.menu.find(i => i.id === id) || {}).name || '?';
+
+  box.innerHTML = menuAdmin.modifiers.map(group => `
+    <div class="stock-group">
+      <div class="stock-group-title">
+        ${esc(group.name)}${group.nameZh ? ' ' + esc(group.nameZh) : ''}
+        <span style="opacity:0.6;">· ${group.selection === 'multi' ? 'choose any' : 'choose one'}${group.required ? ' · required' : ''}</span>
+      </div>
+
+      ${group.options.map(o => `
+        <div class="stock-row">
+          <div class="stock-name">
+            ${esc(o.name)}${o.nameZh ? ' ' + esc(o.nameZh) : ''}
+            <span class="stock-state">${o.priceDelta ? '+RM' + o.priceDelta.toFixed(2) : 'no charge'}${o.isDefault ? ' · default' : ''}</span>
+          </div>
+          <div class="stock-actions">
+            <button class="btn btn-secondary stock-btn" onclick="openOptionEditor(${group.id}, ${o.id})">Edit</button>
+            <button class="btn btn-danger stock-btn" onclick="deleteOption(${o.id})">✕</button>
+          </div>
+        </div>
+      `).join('')}
+
+      <div class="modifier-meta">
+        Applies to:
+        ${group.categoryIds.length ? group.categoryIds.map(id => esc(categoryName(id))).join(', ') : ''}
+        ${group.itemIds.length ? (group.categoryIds.length ? ' · ' : '') + group.itemIds.map(id => esc(itemName(id))).join(', ') : ''}
+        ${!group.categoryIds.length && !group.itemIds.length ? 'nothing yet' : ''}
+      </div>
+
+      <div class="stock-actions" style="margin-top:0.5rem;">
+        <button class="btn btn-secondary stock-btn" onclick="openOptionEditor(${group.id})">+ Option</button>
+        <button class="btn btn-secondary stock-btn" onclick="openAssignEditor(${group.id})">Where it applies</button>
+        <button class="btn btn-secondary stock-btn" onclick="openGroupEditor(${group.id})">Edit group</button>
+        <button class="btn btn-danger stock-btn" onclick="deleteGroup(${group.id})">Delete group</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+function openGroupEditor(groupId) {
+  const group = groupId ? menuAdmin.modifiers.find(g => g.id === groupId) : null;
+  openAdminDialog(group ? 'Edit group' : 'New modifier group', `
+    ${field('Name', 'dlgGName', group ? group.name : '')}
+    ${field('Chinese name (optional)', 'dlgGZh', group ? (group.nameZh || '') : '')}
+    <label class="dialog-field">
+      <span>Selection</span>
+      <select class="input-field" id="dlgGSel">
+        <option value="single" ${group && group.selection === 'single' ? 'selected' : ''}>Choose one (ice, sugar)</option>
+        <option value="multi" ${group && group.selection === 'multi' ? 'selected' : ''}>Choose any (add-ons)</option>
+      </select>
+    </label>
+    <label class="dialog-check"><input type="checkbox" id="dlgGReq" ${group && group.required ? 'checked' : ''}> Customer must choose one</label>
+  `, async () => {
+    const payload = {
+      name: document.getElementById('dlgGName').value.trim(),
+      nameZh: document.getElementById('dlgGZh').value.trim(),
+      selection: document.getElementById('dlgGSel').value,
+      required: document.getElementById('dlgGReq').checked
+    };
+    if (!payload.name) throw new Error('A group name is required');
+    if (group) await adminJson(`/api/admin/modifiers/groups/${group.id}`, 'PATCH', payload);
+    else await adminJson('/api/admin/modifiers/groups', 'POST', payload);
+  });
+}
+
+function openOptionEditor(groupId, optionId) {
+  const group = menuAdmin.modifiers.find(g => g.id === groupId);
+  const option = optionId ? group.options.find(o => o.id === optionId) : null;
+  openAdminDialog(option ? 'Edit option' : `New option in ${group.name}`, `
+    ${field('Name', 'dlgOName', option ? option.name : '')}
+    ${field('Chinese name (optional)', 'dlgOZh', option ? (option.nameZh || '') : '')}
+    ${field('Extra charge (RM)', 'dlgOPrice', option ? option.priceDelta : '0', 'number')}
+    <label class="dialog-check"><input type="checkbox" id="dlgODef" ${option && option.isDefault ? 'checked' : ''}> Selected by default</label>
+  `, async () => {
+    const payload = {
+      name: document.getElementById('dlgOName').value.trim(),
+      nameZh: document.getElementById('dlgOZh').value.trim(),
+      priceDelta: document.getElementById('dlgOPrice').value || 0,
+      isDefault: document.getElementById('dlgODef').checked
+    };
+    if (!payload.name) throw new Error('An option name is required');
+    if (option) await adminJson(`/api/admin/modifiers/options/${option.id}`, 'PATCH', payload);
+    else await adminJson(`/api/admin/modifiers/groups/${groupId}/options`, 'POST', payload);
+  });
+}
+
+function openAssignEditor(groupId) {
+  const group = menuAdmin.modifiers.find(g => g.id === groupId);
+  const cats = menuAdmin.categories.map(c =>
+    `<label class="dialog-check"><input type="checkbox" data-cat="${c.id}" ${group.categoryIds.includes(c.id) ? 'checked' : ''}> ${esc(c.name)}</label>`
+  ).join('');
+  const items = menuAdmin.menu.map(i =>
+    `<label class="dialog-check"><input type="checkbox" data-item="${i.id}" ${group.itemIds.includes(i.id) ? 'checked' : ''}> ${esc(i.name)}</label>`
+  ).join('');
+
+  openAdminDialog(`Where "${group.name}" applies`, `
+    <p style="font-size:0.78rem; color:var(--text-secondary); margin-bottom:0.5rem;">
+      Tick whole categories, or individual drinks for one-off choices.
+    </p>
+    <div class="assign-block"><strong>Categories</strong>${cats}</div>
+    <div class="assign-block"><strong>Individual drinks</strong><div class="assign-scroll">${items}</div></div>
+  `, async () => {
+    const categoryIds = [...document.querySelectorAll('[data-cat]:checked')].map(e => Number(e.dataset.cat));
+    const itemIds = [...document.querySelectorAll('[data-item]:checked')].map(e => Number(e.dataset.item));
+    await adminJson(`/api/admin/modifiers/groups/${groupId}/assignments`, 'PUT', { categoryIds, itemIds });
+  });
+}
+
+async function deleteGroup(id) {
+  if (!confirm('Delete this whole group and its options?')) return;
+  await adminJson(`/api/admin/modifiers/groups/${id}`, 'DELETE').catch(e => alert(e.message));
+  loadMenuAdmin();
+}
+
+async function deleteOption(id) {
+  if (!confirm('Delete this option?')) return;
+  await adminJson(`/api/admin/modifiers/options/${id}`, 'DELETE').catch(e => alert(e.message));
+  loadMenuAdmin();
+}
+
+// Small wrapper: sends JSON, throws the server's message on failure.
+async function adminJson(url, method, body) {
+  const options = { method, headers: {} };
+  if (body !== undefined) {
+    options.headers['Content-Type'] = 'application/json';
+    options.body = JSON.stringify(body);
+  }
+  const res = await adminFetch(url, options);
+  const data = await readJsonOrExplain(res);
+  if (!res.ok) throw new Error(data.error || 'Request failed');
+  return data;
 }
 
 // -------------------------------------------------------------
