@@ -2061,3 +2061,13 @@ h1, h2, h3, h4, h5, h6 {
 
 .history-pager .btn { padding: 0.5rem 1rem; font-size: 0.82rem; }
 .history-pager .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* Modifier groups are now injected into one container, so they no longer
+   inherit the sheet's flex gap. */
+#modGroupsContainer .modifier-section {
+  margin-top: 1.1rem;
+}
+
+#modGroupsContainer .addon-row + .addon-row {
+  margin-top: 0.4rem;
+}

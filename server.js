@@ -64,378 +64,23 @@ app.use(express.static(path.join(__dirname, 'public'), {
 }));
 
 // Categorized Menu Database in Ringgit Malaysia (RM)
-const menuItems = [
-  // 1. Milk Tea (奶茶)
-  {
-    id: 1,
-    name: "Jasmine Green Milk Tea (茉莉奶绿)",
-    category: "Milk Tea",
-    description: "Fragrant jasmine green tea blended with sweet milk, cold and refreshing.",
-    variants: [
-      { name: "M (500ml)", price: 8.00 },
-      { name: "L (700ml)", price: 10.00 }
-    ],
-    image: "/images/milktea.png"
-  },
-  {
-    id: 2,
-    name: "White Peach Oolong Milk Tea (白桃乌龙)",
-    category: "Milk Tea",
-    description: "Premium white peach oolong tea infused with milky goodness.",
-    variants: [
-      { name: "M (500ml)", price: 8.00 },
-      { name: "L (700ml)", price: 10.00 }
-    ],
-    image: "/images/milktea.png"
-  },
-  {
-    id: 3,
-    name: "Da Hong Pao Milk Tea (大红袍奶茶)",
-    category: "Milk Tea",
-    description: "Rich, roasted Da Hong Pao tea combined with milk for a deep flavor.",
-    variants: [
-      { name: "M (500ml)", price: 8.00 },
-      { name: "L (700ml)", price: 10.00 }
-    ],
-    image: "/images/milktea.png"
-  },
-  {
-    id: 4,
-    name: "Camellia Milk Tea (山茶花奶茶)",
-    category: "Milk Tea",
-    description: "Floral camellia oolong tea mixed with smooth milk cream.",
-    variants: [
-      { name: "M (500ml)", price: 9.00 },
-      { name: "L (700ml)", price: 11.00 }
-    ],
-    image: "/images/milktea.png"
-  },
-  {
-    id: 5,
-    name: "Lemon Jasmine Milk Tea (柠檬茉莉)",
-    category: "Milk Tea",
-    description: "Unique pairing of fresh tangy lemon with creamy jasmine milk tea.",
-    variants: [
-      { name: "M (500ml)", price: 8.00 }
-    ],
-    image: "/images/milktea.png"
-  },
-  {
-    id: 6,
-    name: "Cocoa Milk Tea (可可奶茶)",
-    category: "Milk Tea",
-    description: "Luxurious chocolate powder brewed with premium milk tea.",
-    variants: [
-      { name: "L (700ml)", price: 10.00 }
-    ],
-    image: "/images/milktea.png"
-  },
-  {
-    id: 7,
-    name: "Sea Salt Camellia Milk Tea (海盐奶茶)",
-    category: "Milk Tea",
-    description: "Floral camellia oolong milk tea topped with savory sea salt froth.",
-    variants: [
-      { name: "M (500ml)", price: 9.00 },
-      { name: "L (700ml)", price: 11.00 }
-    ],
-    image: "/images/milktea.png"
-  },
+// The menu now lives in the database (see migrations/002 and scripts/seed-menu.js).
+// It is cached briefly so a burst of menu requests does not become a burst of
+// queries, while an edit still shows up within a few seconds.
+const MENU_CACHE_MS = 5000;
+let menuCache = null;
+let menuCachedAt = 0;
 
-  // 2. Fruit Tea (水果茶)
-  {
-    id: 8,
-    name: "Jasmine Perfume Lemon Tea (暴打柠檬茶)",
-    category: "Fruit Tea",
-    description: "Smashed fresh perfume lemon in high-grade jasmine green tea.",
-    variants: [
-      { name: "M (500ml)", price: 8.00 },
-      { name: "L (700ml)", price: 10.00 }
-    ]
-  },
-  {
-    id: 9,
-    name: "Lemon Tea (柠檬茶)",
-    category: "Fruit Tea",
-    description: "Tangy fresh lemon in your choice of roasted oolong or peach base tea.",
-    variants: [
-      { name: "M (500ml)", price: 8.00 },
-      { name: "L (700ml)", price: 10.00 }
-    ]
-  },
-  {
-    id: 10,
-    name: "Camellia Perfume Lemon Tea (山茶花柠檬茶)",
-    category: "Fruit Tea",
-    description: "Freshly muddled perfume lemons in elegant camellia oolong tea.",
-    variants: [
-      { name: "M (500ml)", price: 9.00 },
-      { name: "L (700ml)", price: 11.00 }
-    ]
-  },
-  {
-    id: 11,
-    name: "White Peach Oolong Grape Tea (青提乌龙)",
-    category: "Fruit Tea",
-    description: "Sweet green grapes blended with premium white peach oolong tea.",
-    variants: [
-      { name: "M (500ml)", price: 10.00 },
-      { name: "L (700ml)", price: 12.00 }
-    ]
-  },
-  {
-    id: 12,
-    name: "Crystal Grape Oolong Tea (青提脆波波)",
-    category: "Fruit Tea",
-    description: "Fragrant oolong tea loaded with fresh grapes and crunchy crystal boba.",
-    variants: [
-      { name: "M (500ml)", price: 12.00 },
-      { name: "L (700ml)", price: 14.00 }
-    ]
-  },
-  {
-    id: 13,
-    name: "Jasmine Perfume Grape Tea (青提柠檬)",
-    category: "Fruit Tea",
-    description: "Muddled grapes and perfume lemon shaken with jasmine green tea.",
-    variants: [
-      { name: "M (500ml)", price: 11.00 },
-      { name: "L (700ml)", price: 13.00 }
-    ]
-  },
-  {
-    id: 14,
-    name: "Jasmine Peach Tea (茉莉桃香)",
-    category: "Fruit Tea",
-    description: "Refreshing peach purée blended with icy jasmine green tea.",
-    variants: [
-      { name: "M (500ml)", price: 8.00 },
-      { name: "L (700ml)", price: 10.00 }
-    ]
-  },
+async function getMenu() {
+  if (menuCache && Date.now() - menuCachedAt < MENU_CACHE_MS) return menuCache;
+  menuCache = await store.getMenu();
+  menuCachedAt = Date.now();
+  return menuCache;
+}
 
-  // 3. Pure Tea (纯茶)
-  {
-    id: 15,
-    name: "White Peach Tea (白桃)",
-    category: "Pure Tea",
-    description: "Clean and aromatic white peach oolong tea.",
-    variants: [
-      { name: "Pure Tea (纯茶)", price: 8.00 },
-      { name: "Tea Macchiato (奶盖茶)", price: 11.00 }
-    ],
-    image: "/images/puretea.png"
-  },
-  {
-    id: 16,
-    name: "Da Hong Pao Tea (大红袍)",
-    category: "Pure Tea",
-    description: "Dark, roasted rock oolong tea with a lingering sweet finish.",
-    variants: [
-      { name: "Pure Tea (纯茶)", price: 8.00 },
-      { name: "Tea Macchiato (奶盖茶)", price: 11.00 }
-    ],
-    image: "/images/puretea.png"
-  },
-  {
-    id: 17,
-    name: "Camellia Tea (山茶花)",
-    category: "Pure Tea",
-    description: "Floral camellia oolong tea, crisp and light-bodied.",
-    variants: [
-      { name: "Pure Tea (纯茶)", price: 9.00 },
-      { name: "Tea Macchiato (奶盖茶)", price: 12.00 }
-    ],
-    image: "/images/puretea.png"
-  },
-
-  // 4. Cold Brew Tea (冷萃茶)
-  {
-    id: 18,
-    name: "Da Hong Pao Cold Brew (大红袍冷萃)",
-    category: "Cold Brew",
-    description: "Slow-dripped roasted oolong tea, highly refreshing with low bitterness.",
-    variants: [
-      { name: "M (500ml)", price: 8.00 }
-    ],
-    image: "/images/dahongpaocoldbrew.png"
-  },
-  {
-    id: 19,
-    name: "Tie Guan Yin Cold Brew (铁观音冷萃)",
-    category: "Cold Brew",
-    description: "Slow-steeped floral Tie Guan Yin oolong, served chilled.",
-    variants: [
-      { name: "M (500ml)", price: 8.00 }
-    ]
-  },
-  {
-    id: 20,
-    name: "Glutinous Green Cold Brew (糯香冷萃)",
-    category: "Cold Brew",
-    description: "Green tea with natural glutinous rice leaf aroma, brewed cold.",
-    variants: [
-      { name: "M (500ml)", price: 8.00 }
-    ],
-    image: "/images/glutinousgreencoldbrew.png"
-  },
-
-  // 5. Smoothie (冰沙)
-  {
-    id: 35,
-    name: "Fresh Watermelon Jasmine Tea (西瓜冰沙)",
-    category: "Smoothie",
-    description: "Fresh watermelon blended with jasmine green tea into an icy smoothie.",
-    variants: [
-      { name: "L (700ml)", price: 12.00 },
-      { name: "Tea Macchiato (奶盖茶)", price: 15.00 }
-    ],
-    image: "/images/watermelonsmoothie.png"
-  },
-
-  // 6. Coffee Series (咖啡系列)
-  {
-    id: 21,
-    name: "Americano (美式)",
-    category: "Coffee",
-    description: "Double espresso shot diluted with purified water. (500ml)",
-    variants: [
-      { name: "Standard (500ml)", price: 6.00 }
-    ],
-    image: "/images/americano.png"
-  },
-  {
-    id: 22,
-    name: "Orange Americano (香橙美式)",
-    category: "Coffee",
-    description: "Fresh sweet orange juice topped with a double espresso shot. (500ml)",
-    variants: [
-      { name: "Standard (500ml)", price: 7.00 }
-    ],
-    image: "/images/orangeamericano.png"
-  },
-  {
-    id: 23,
-    name: "Latte (拿铁)",
-    category: "Coffee",
-    description: "Smooth double espresso shot with steamed milk and thin foam layer. (500ml)",
-    variants: [
-      { name: "Standard (500ml)", price: 8.00 }
-    ],
-    image: "/images/latte.png"
-  },
-  {
-    id: 24,
-    name: "Spanish Latte (西班牙拿铁)",
-    category: "Coffee",
-    description: "Latte sweetened with rich condensed milk for a velvety finish. (500ml)",
-    variants: [
-      { name: "Standard (500ml)", price: 9.00 }
-    ],
-    image: "/images/spanishlatte.png"
-  },
-  {
-    id: 25,
-    name: "Mocha (摩卡)",
-    category: "Coffee",
-    description: "Double espresso shot blended with dark chocolate and steamed milk. (500ml)",
-    variants: [
-      { name: "Standard (500ml)", price: 9.00 }
-    ]
-  },
-
-  // 7. Non-Coffee Series
-  {
-    id: 26,
-    name: "Iced Chocolate (冰巧克力)",
-    category: "Non-Coffee",
-    description: "Rich dark cocoa blended with ice-cold premium milk. (500ml)",
-    variants: [
-      { name: "Standard (500ml)", price: 9.00 }
-    ]
-  },
-  {
-    id: 27,
-    name: "Yuzu Sparkling (柚子气泡饮)",
-    category: "Non-Coffee",
-    description: "Sweet, tangy Korean Yuzu jam with ice and sparkling water. (500ml)",
-    variants: [
-      { name: "Standard (500ml)", price: 6.00 }
-    ],
-    image: "/images/yuzusparkling.png"
-  },
-  {
-    id: 28,
-    name: "Jasmin Yuzu Lemon Tea (茉莉柚子柠檬茶)",
-    category: "Non-Coffee",
-    description: "Jasmine green tea with perfume lemons and candied yuzu peels. (500ml)",
-    variants: [
-      { name: "Standard (500ml)", price: 11.00 }
-    ]
-  },
-  {
-    id: 34,
-    name: "Taro Latte (香芋拿铁)",
-    category: "Non-Coffee",
-    description: "Creamy milk flavored with rich, sweet purple taro root, served chilled. (350ml)",
-    variants: [
-      { name: "Standard (350ml)", price: 10.00 }
-    ],
-    image: "/images/tarolatte.png"
-  },
-
-  // 8. Matcha Series (抹茶系列)
-  {
-    id: 29,
-    name: "Matcha Latte (抹茶拿铁)",
-    category: "Matcha",
-    description: "Premium stone-ground matcha whisked with fresh milk. (350ml)",
-    variants: [
-      { name: "Standard (350ml)", price: 11.00 }
-    ]
-  },
-  {
-    id: 30,
-    name: "Hojicha Latte (焙茶拿铁)",
-    category: "Matcha",
-    description: "Roasted oolong green tea tea powder whisked with fresh milk. (350ml)",
-    variants: [
-      { name: "Standard (350ml)", price: 11.00 }
-    ],
-    image: "/images/hoijichalatte.png"
-  },
-  {
-    id: 31,
-    name: "Strawberry Matcha Latte (草莓抹茶拿铁)",
-    category: "Matcha",
-    description: "Layered matcha latte with fresh strawberry purée at the bottom. (350ml)",
-    variants: [
-      { name: "Standard (350ml)", price: 13.00 }
-    ]
-  },
-  {
-    id: 32,
-    name: "Strawberry Hojicha Latte (草莓焙茶拿铁)",
-    category: "Matcha",
-    description: "Layered roasted hojicha latte with fresh strawberry purée. (350ml)",
-    variants: [
-      { name: "Standard (350ml)", price: 13.00 }
-    ]
-  },
-  {
-    id: 33,
-    name: "Silky Matcha (抹茶升级杯)",
-    category: "Matcha",
-    description: "Uji matcha with a extra rich cream blend for a silky body. (350ml)",
-    variants: [
-      { name: "Standard (350ml)", price: 12.00 }
-    ]
-  }
-];
-
-// Crystal Boba is offered across the OTea tea range only - the GreyOne
-// coffee/matcha side has its own add-ons. Mirrored in public/js/app.js.
-const BOBA_CATEGORIES = ['Milk Tea', 'Fruit Tea', 'Pure Tea', 'Smoothie'];
+function invalidateMenuCache() {
+  menuCache = null;
+}
 
 // -------------------------------------------------------------
 // Order storage (SQLite - see db.js)
@@ -579,6 +224,11 @@ function cleanText(value, maxLength) {
   return value.replace(/[\x00-\x1F\x7F]/g, '').trim().slice(0, maxLength);
 }
 
+function modifierLabel(groupName, optionName, priceDelta) {
+  if (priceDelta) return `${optionName} (+RM${priceDelta.toFixed(2)})`;
+  return `${groupName}: ${optionName}`;
+}
+
 // Finds the ordering zone the customer is standing in, nearest first.
 // Returns null when they are outside every configured zone.
 function resolveZone(lat, lng) {
@@ -666,15 +316,14 @@ app.get('/api/health', async (req, res) => {
     },
     database: db,
     zones: ORDER_ZONES.map(z => z.name),
-    menuItems: menuItems.length
+    menuItems: (await getMenu().catch(() => [])).length
   });
 });
 
 // 1. Get restaurant menu, annotated with what is currently sold out
 app.get('/api/menu', async (req, res, next) => {
   try {
-  const soldOut = await store.unavailableIds();
-  res.json(menuItems.map(item => Object.assign({}, item, { available: !soldOut.has(item.id) })));
+    res.json(await getMenu());
   } catch (err) { next(err); }
 });
 
@@ -729,29 +378,38 @@ app.post('/api/orders', async (req, res, next) => {
     });
   }
 
-  // Calculate order items and total price securely
-  const soldOutIds = await store.unavailableIds();
+  // Calculate order items and total price securely.
+  //
+  // Prices and modifier charges always come from the database, never from the
+  // request. The client sends only which item, variant and option ids it wants.
+  const menu = await getMenu();
   let total = 0;
   const enrichedItems = [];
 
   for (const cartItem of items) {
-    const original = menuItems.find(m => m.id === cartItem.id);
+    const original = menu.find(m => m.id === cartItem.id);
     if (!original) {
       return res.status(400).json({ error: `Invalid item reference: ID ${cartItem.id}` });
     }
 
     // Checked here as well as in the UI: a stale page could still submit an
     // item that sold out while the customer was choosing.
-    if (soldOutIds.has(original.id)) {
+    if (!original.available) {
       return res.status(409).json({
         error: `Sorry, ${original.name} just sold out. Please remove it and try again.`,
         soldOutItemId: original.id
       });
     }
 
-    const varIdx = typeof cartItem.variantIndex === 'number' ? cartItem.variantIndex : 0;
-    if (varIdx < 0 || varIdx >= original.variants.length) {
-      return res.status(400).json({ error: `Invalid variant selection for item ${original.name}` });
+    // Accepts a variant id; falls back to an index for older clients.
+    let variant = null;
+    if (cartItem.variantId != null) {
+      variant = original.variants.find(v => v.id === Number(cartItem.variantId));
+    } else if (typeof cartItem.variantIndex === 'number') {
+      variant = original.variants[cartItem.variantIndex];
+    }
+    if (!variant) {
+      return res.status(400).json({ error: `Invalid size or type selected for ${original.name}` });
     }
 
     // Quantity is the one number that scales the bill, so it is validated hard.
@@ -760,49 +418,67 @@ app.post('/api/orders', async (req, res, next) => {
       return res.status(400).json({ error: `Invalid quantity for ${original.name} (1-20 per item)` });
     }
 
-    const variant = original.variants[varIdx];
-    let itemPrice = variant.price;
+    // Resolve the chosen options against the groups this drink actually offers,
+    // so a request cannot smuggle in an option from another drink.
+    const requested = Array.isArray(cartItem.optionIds)
+      ? cartItem.optionIds.map(Number).filter(Number.isInteger)
+      : [];
 
-    let addonCharge = 0;
-    let selectedAddons = [];
-
-    // Crystal Boba add-on (tea range only)
-    if (BOBA_CATEGORIES.includes(original.category) && cartItem.addons && cartItem.addons.crystalBoba) {
-      addonCharge += 2.00;
-      selectedAddons.push("Crystal Boba (+RM2.00)");
+    const allowed = new Map();
+    for (const group of original.modifierGroups) {
+      for (const option of group.options) allowed.set(option.id, { group, option });
     }
 
-    // Apply Coffee Add-ons calculations
-    if (original.category === 'Coffee' && cartItem.addons && cartItem.addons.extraEspresso) {
-      addonCharge += 2.50;
-      selectedAddons.push("Extra Espresso Shot (+RM2.50)");
-    }
-
-    // Apply Matcha Upgrades calculations
-    if (original.category === 'Matcha' && cartItem.addons && cartItem.addons.nikoNekoUpgrade) {
-      const upgrade = cartItem.addons.nikoNekoUpgrade;
-      if (upgrade === 'yuri') {
-        addonCharge += 2.00;
-        selectedAddons.push("Niko Neko Yuri (+RM2.00)");
-      } else if (upgrade === 'ajisai') {
-        addonCharge += 3.00;
-        selectedAddons.push("Niko Neko Ajisai (+RM3.00)");
+    const chosen = [];
+    const perGroup = new Map();
+    for (const optionId of requested) {
+      const hit = allowed.get(optionId);
+      if (!hit) {
+        return res.status(400).json({ error: `That option is not available for ${original.name}` });
       }
+      const count = (perGroup.get(hit.group.id) || 0) + 1;
+      perGroup.set(hit.group.id, count);
+      if (hit.group.selection === 'single' && count > 1) {
+        return res.status(400).json({ error: `Only one ${hit.group.name} may be chosen for ${original.name}` });
+      }
+      chosen.push(hit);
     }
 
-    const finalPricePerUnit = itemPrice + addonCharge;
+    // Required groups fall back to their default rather than rejecting the
+    // order, so an older client that omits them still produces a valid ticket.
+    for (const group of original.modifierGroups) {
+      if (!group.required || perGroup.get(group.id)) continue;
+      const fallback = group.options.find(o => o.isDefault) || group.options[0];
+      if (fallback) chosen.push({ group, option: fallback });
+    }
+
+    const addonCharge = chosen.reduce((sum, c) => sum + c.option.priceDelta, 0);
+    const finalPricePerUnit = Math.round((variant.price + addonCharge) * 100) / 100;
     total += finalPricePerUnit * quantity;
 
     enrichedItems.push({
       id: original.id,
       name: original.name,
+      variantId: variant.id,
       variantName: variant.name,
+      basePrice: variant.price,
       price: finalPricePerUnit,
       quantity,
-      ice: cleanText(cartItem.ice, 40) || "Normal Ice",
-      sugar: cleanText(cartItem.sugar, 40) || "Normal Sugar",
-      teaBase: cleanText(cartItem.teaBase, 60),
-      addonsText: selectedAddons.join(", ")
+      category: original.category,
+      company: original.company,
+      modifiers: chosen
+        .sort((a, b) => a.group.sortOrder - b.group.sortOrder)
+        .map(c => ({
+          groupId: c.group.id,
+          groupName: c.group.name,
+          optionId: c.option.id,
+          optionName: c.option.name,
+          priceDelta: c.option.priceDelta
+        })),
+      modifiersText: chosen
+        .sort((a, b) => a.group.sortOrder - b.group.sortOrder)
+        .map(c => modifierLabel(c.group.name, c.option.name, c.option.priceDelta))
+        .join(' | ')
     });
   }
 
@@ -1002,7 +678,7 @@ app.get('/api/admin/history.csv', requireAdmin, async (req, res, next) => {
 app.post('/api/admin/menu/:id/availability', requireAdmin, async (req, res, next) => {
   try {
   const id = parseInt(req.params.id, 10);
-  const item = menuItems.find(m => m.id === id);
+  const item = (await getMenu()).find(m => m.id === id);
   if (!item) {
     return res.status(404).json({ error: 'Menu item not found' });
   }
@@ -1011,6 +687,7 @@ app.post('/api/admin/menu/:id/availability', requireAdmin, async (req, res, next
   }
 
   await store.setAvailability(id, req.body.available);
+  invalidateMenuCache();
 
   res.json({ success: true, id, available: req.body.available });
   } catch (err) { next(err); }

@@ -80,15 +80,18 @@ function rowToOrder(row, items) {
 
 function rowToItem(row) {
   return {
+    lineId: row.id,
     id: row.menu_item_id,
     name: row.name,
+    variantId: row.variant_id,
     variantName: row.variant_name,
+    basePrice: row.base_price === null ? null : Number(row.base_price),
     price: Number(row.price),
     quantity: row.quantity,
-    ice: row.ice,
-    sugar: row.sugar,
-    teaBase: row.tea_base,
-    addonsText: row.addons_text
+    category: row.category,
+    company: row.company,
+    modifiersText: row.modifiers_text || '',
+    modifiers: []
   };
 }
 
@@ -102,10 +105,30 @@ async function itemsFor(orderIds) {
     'SELECT * FROM order_items WHERE order_id = ANY($1::text[]) ORDER BY id',
     [orderIds]
   );
+
+  const lines = new Map();
   for (const row of rows) {
+    const item = rowToItem(row);
+    lines.set(row.id, item);
     if (!byOrder.has(row.order_id)) byOrder.set(row.order_id, []);
-    byOrder.get(row.order_id).push(rowToItem(row));
+    byOrder.get(row.order_id).push(item);
   }
+
+  if (lines.size) {
+    const mods = await query(
+      'SELECT * FROM order_item_modifiers WHERE order_item_id = ANY($1::bigint[]) ORDER BY id',
+      [[...lines.keys()]]
+    );
+    for (const m of mods.rows) {
+      const line = lines.get(Number(m.order_item_id));
+      if (line) line.modifiers.push({
+        groupName: m.group_name,
+        optionName: m.option_name,
+        priceDelta: Number(m.price_delta)
+      });
+    }
+  }
+
   return byOrder;
 }
 
@@ -134,13 +157,26 @@ module.exports = {
       );
 
       for (const item of order.items) {
-        await client.query(
-          `INSERT INTO order_items (order_id, menu_item_id, name, variant_name,
-             price, quantity, ice, sugar, tea_base, addons_text)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-          [order.id, item.id, item.name, item.variantName, item.price,
-           item.quantity, item.ice, item.sugar, item.teaBase, item.addonsText]
+        const line = await client.query(
+          `INSERT INTO order_items (order_id, menu_item_id, name, variant_id, variant_name,
+             base_price, price, quantity, category, company, modifiers_text)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
+          [order.id, item.id, item.name, item.variantId || null, item.variantName,
+           item.basePrice ?? null, item.price, item.quantity,
+           item.category || null, item.company || null, item.modifiersText || '']
         );
+        const lineId = line.rows[0].id;
+
+        // Option names and prices are copied, not referenced, so editing the
+        // menu later never rewrites what a customer was actually charged.
+        for (const m of (item.modifiers || [])) {
+          await client.query(
+            `INSERT INTO order_item_modifiers (order_item_id, group_id, option_id,
+               group_name, option_name, price_delta)
+             VALUES ($1,$2,$3,$4,$5,$6)`,
+            [lineId, m.groupId, m.optionId, m.groupName, m.optionName, m.priceDelta]
+          );
+        }
       }
 
       await client.query('COMMIT');
@@ -156,8 +192,8 @@ module.exports = {
   async getOrder(id) {
     const { rows } = await query('SELECT * FROM orders WHERE id = $1', [id]);
     if (!rows.length) return null;
-    const items = await query('SELECT * FROM order_items WHERE order_id = $1 ORDER BY id', [id]);
-    return rowToOrder(rows[0], items.rows.map(rowToItem));
+    const byOrder = await itemsFor([id]);
+    return rowToOrder(rows[0], byOrder.get(id) || []);
   },
 
   async listOrders(limit = 500) {
@@ -202,6 +238,116 @@ module.exports = {
       [ip, windowMs]
     );
     return rows[0].n;
+  },
+
+  // -----------------------------------------------------------
+  // Menu
+  //
+  // Four flat queries stitched in memory rather than one big join, which would
+  // multiply rows across variants x options and need de-duplicating.
+  // -----------------------------------------------------------
+  async getMenu({ includeInactive = false } = {}) {
+    const activeOnly = includeInactive ? '' : 'AND i.is_active AND c.is_active';
+
+    const [items, variants, groups, options, catLinks, itemLinks, soldOut] = await Promise.all([
+      query(`SELECT i.id, i.name, i.description, i.image_url, i.sort_order, i.is_active,
+                    c.id AS category_id, c.name AS category, c.name_zh AS category_zh,
+                    c.sort_order AS category_sort, co.code AS company
+               FROM menu_items i
+               JOIN menu_categories c ON c.id = i.category_id
+               JOIN companies co ON co.id = c.company_id
+              WHERE TRUE ${activeOnly}
+              ORDER BY c.sort_order, i.sort_order, i.id`),
+      query('SELECT * FROM menu_variants WHERE is_active ORDER BY item_id, sort_order, id'),
+      query('SELECT * FROM modifier_groups WHERE is_active ORDER BY sort_order, id'),
+      query('SELECT * FROM modifier_options WHERE is_active ORDER BY group_id, sort_order, id'),
+      query('SELECT * FROM category_modifier_groups'),
+      query('SELECT * FROM item_modifier_groups'),
+      query('SELECT menu_item_id FROM menu_availability WHERE available = false')
+    ]);
+
+    const soldOutIds = new Set(soldOut.rows.map(r => r.menu_item_id));
+
+    const optionsByGroup = new Map();
+    for (const o of options.rows) {
+      if (!optionsByGroup.has(o.group_id)) optionsByGroup.set(o.group_id, []);
+      optionsByGroup.get(o.group_id).push({
+        id: o.id,
+        name: o.name,
+        nameZh: o.name_zh,
+        priceDelta: Number(o.price_delta),
+        isDefault: o.is_default
+      });
+    }
+
+    const groupById = new Map();
+    for (const g of groups.rows) {
+      groupById.set(g.id, {
+        id: g.id,
+        name: g.name,
+        nameZh: g.name_zh,
+        selection: g.selection,
+        required: g.is_required,
+        sortOrder: g.sort_order,
+        options: optionsByGroup.get(g.id) || []
+      });
+    }
+
+    const groupsForCategory = new Map();
+    for (const link of catLinks.rows) {
+      if (!groupsForCategory.has(link.category_id)) groupsForCategory.set(link.category_id, []);
+      groupsForCategory.get(link.category_id).push(link.group_id);
+    }
+    const groupsForItem = new Map();
+    for (const link of itemLinks.rows) {
+      if (!groupsForItem.has(link.item_id)) groupsForItem.set(link.item_id, []);
+      groupsForItem.get(link.item_id).push(link.group_id);
+    }
+
+    const variantsByItem = new Map();
+    for (const v of variants.rows) {
+      if (!variantsByItem.has(v.item_id)) variantsByItem.set(v.item_id, []);
+      variantsByItem.get(v.item_id).push({ id: v.id, name: v.name, price: Number(v.price) });
+    }
+
+    return items.rows.map(row => {
+      const ids = new Set([
+        ...(groupsForCategory.get(row.category_id) || []),
+        ...(groupsForItem.get(row.id) || [])
+      ]);
+      const modifierGroups = [...ids]
+        .map(id => groupById.get(id))
+        .filter(Boolean)
+        .sort((a, b) => a.sortOrder - b.sortOrder);
+
+      return {
+        id: row.id,
+        name: row.name,
+        description: row.description,
+        category: row.category,
+        categoryZh: row.category_zh,
+        categoryId: row.category_id,
+        company: row.company,
+        image: row.image_url || undefined,
+        sortOrder: row.sort_order,
+        isActive: row.is_active,
+        available: !soldOutIds.has(row.id),
+        variants: variantsByItem.get(row.id) || [],
+        modifierGroups
+      };
+    });
+  },
+
+  async listCategories() {
+    const { rows } = await query(
+      `SELECT c.*, co.code AS company FROM menu_categories c
+         JOIN companies co ON co.id = c.company_id
+        ORDER BY c.sort_order, c.id`
+    );
+    return rows.map(r => ({
+      id: r.id, name: r.name, nameZh: r.name_zh, company: r.company,
+      companyId: r.company_id, sortOrder: r.sort_order, isActive: r.is_active
+    }));
   },
 
   // -----------------------------------------------------------

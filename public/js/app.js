@@ -11,21 +11,9 @@ let mapInstance = null;
 // map is drawn - see the init sequence below.
 let restaurantLocation = { lat: 3.2158, lng: 101.7290 };
 
-// Crystal Boba is an add-on across the OTea tea range, not the GreyOne
-// coffee/matcha side. Keep this list in step with BOBA_CATEGORIES in server.js.
-const BOBA_CATEGORIES = ['Milk Tea', 'Fruit Tea', 'Pure Tea', 'Smoothie'];
-
 // Active modifier modal state
 let activeItemForCustomization = null;
 let selectedVariantIndex = 0;
-let selectedIce = "Normal Ice";
-let selectedSugar = "Normal Sugar";
-let selectedTeaBase = null; // "Da Hong Pao (大红袍)" or "White Peach (白桃乌龙)"
-let selectedAddons = {
-  crystalBoba: false,
-  extraEspresso: false,
-  nikoNekoUpgrade: "none"
-};
 
 // QR countdown state
 let qrTimerInterval = null;
@@ -261,6 +249,48 @@ function handleSearch() {
 // -------------------------------------------------------------
 // Slide-Up Customization Modal Logic
 // -------------------------------------------------------------
+function modifierLabel(groupName, optionName, priceDelta) {
+  if (priceDelta) return `${optionName} (+RM${priceDelta.toFixed(2)})`;
+  return `${groupName}: ${optionName}`;
+}
+
+// Resolves a stored cart line against the current menu. Returns null if the
+// drink or size has since been removed from the menu.
+function resolveCartLine(cartItem) {
+  const item = menuData.find(m => m.id === cartItem.id);
+  if (!item) return null;
+
+  const variant = item.variants.find(v => v.id === cartItem.variantId)
+    || item.variants[cartItem.variantIndex || 0];
+  if (!variant) return null;
+
+  const chosen = [];
+  for (const group of (item.modifierGroups || [])) {
+    for (const option of group.options) {
+      if ((cartItem.optionIds || []).includes(option.id)) chosen.push({ group, option });
+    }
+  }
+
+  const unitPrice = Math.round(
+    (variant.price + chosen.reduce((sum, c) => sum + c.option.priceDelta, 0)) * 100
+  ) / 100;
+
+  const optionsText = [variant.name]
+    .concat(chosen.map(c => modifierLabel(c.group.name, c.option.name, c.option.priceDelta)))
+    .join(' | ');
+
+  return { item, variant, chosen, unitPrice, optionsText };
+}
+
+// -------------------------------------------------------------
+// Customisation sheet
+//
+// Sizes and modifier groups are rendered from whatever the menu database says
+// this drink offers, so adding a modifier in the admin console needs no code
+// change here. selectedOptions maps groupId -> Set(optionId).
+// -------------------------------------------------------------
+let selectedOptions = new Map();
+
 function openModifiersModal(itemId) {
   const item = menuData.find(m => m.id === itemId);
   if (!item) return;
@@ -271,218 +301,163 @@ function openModifiersModal(itemId) {
 
   activeItemForCustomization = item;
   selectedVariantIndex = 0;
-  selectedIce = "Normal Ice";
-  selectedSugar = "Normal Sugar";
-  selectedAddons = {
-    crystalBoba: false,
-    extraEspresso: false,
-    nikoNekoUpgrade: "none"
-  };
+  selectedOptions = new Map();
 
-  // Populate basic text
   document.getElementById('modDrinkTitle').innerText = item.name;
-  document.getElementById('modDrinkDesc').innerText = item.description;
+  document.getElementById('modDrinkDesc').innerText = item.description || '';
 
-  // Render sizes/variants
-  const sizeContainer = document.getElementById('modSizeContainer');
-  sizeContainer.innerHTML = item.variants.map((v, idx) => `
-    <div class="modifier-pill ${idx === 0 ? 'active' : ''}" 
-         data-variant-idx="${idx}" 
-         onclick="selectVariant(${idx})">
-      ${v.name}<br><span style="font-size:0.7rem; font-weight:700; color:var(--accent-color);">RM ${v.price.toFixed(2)}</span>
-    </div>
-  `).join('');
-
-  // Handle specialty addons sections
-  const coffeeSection = document.getElementById('modCoffeeAddonSection');
-  const matchaSection = document.getElementById('modMatchaAddonSection');
-  const teaBaseSection = document.getElementById('modTeaBaseSection');
-
-  // Reset active classes on standard options
-  resetModifierPillSelection('modIceSection', 'Normal Ice', 'ice');
-  resetModifierPillSelection('modSugarSection', 'Normal Sugar', 'sugar');
-
-  // Smoothies are blended - an ice level would be meaningless on the ticket.
-  const iceSection = document.getElementById('modIceSection');
-  const isBlended = item.category === 'Smoothie';
-  iceSection.style.display = isBlended ? 'none' : 'flex';
-  if (isBlended) selectedIce = 'Blended';
-
-  const bobaSection = document.getElementById('modBobaAddonSection');
-  if (BOBA_CATEGORIES.includes(item.category)) {
-    bobaSection.style.display = 'block';
-    document.getElementById('addonCrystalBoba').classList.remove('active');
-  } else {
-    bobaSection.style.display = 'none';
-  }
-
-  if (item.category === "Coffee") {
-    coffeeSection.style.display = 'block';
-    document.getElementById('addonExtraEspresso').classList.remove('active');
-  } else {
-    coffeeSection.style.display = 'none';
-  }
-
-  if (item.category === "Matcha") {
-    matchaSection.style.display = 'block';
-    resetModifierPillSelection('modMatchaAddonSection', 'none', 'matcha');
-  } else {
-    matchaSection.style.display = 'none';
-  }
-
-  // Handle Lemon Tea base selector
-  if (item.id === 9) {
-    teaBaseSection.style.display = 'block';
-    selectedTeaBase = "Da Hong Pao (大红袍)";
-    resetModifierPillSelection('modTeaBaseSection', 'Da Hong Pao (大红袍)', 'base');
-  } else {
-    teaBaseSection.style.display = 'none';
-    selectedTeaBase = null;
-  }
-
+  renderVariantChoices(item);
+  renderModifierGroups(item);
   updateModifiersPriceTally();
 
-  // Show bottom sheet overlay
   document.getElementById('modifiersModalOverlay').classList.add('open');
+  document.body.style.overflow = 'hidden';
 }
 
-function closeModifiersModal() {
-  document.getElementById('modifiersModalOverlay').classList.remove('open');
-  activeItemForCustomization = null;
+function renderVariantChoices(item) {
+  document.getElementById('modSizeContainer').innerHTML = item.variants.map((v, idx) => `
+    <div class="modifier-pill ${idx === 0 ? 'active' : ''}"
+         data-variant-idx="${idx}"
+         onclick="selectVariant(${idx})">
+      ${esc(v.name)}<br><span style="font-size:0.7rem; font-weight:700; color:var(--accent-color);">RM ${v.price.toFixed(2)}</span>
+    </div>
+  `).join('');
+}
+
+function renderModifierGroups(item) {
+  const container = document.getElementById('modGroupsContainer');
+  const groups = item.modifierGroups || [];
+
+  // Pre-select each group's default so required choices are never empty.
+  groups.forEach(group => {
+    const chosen = new Set();
+    if (group.selection === 'single') {
+      const def = group.options.find(o => o.isDefault) || (group.required ? group.options[0] : null);
+      if (def) chosen.add(def.id);
+    }
+    selectedOptions.set(group.id, chosen);
+  });
+
+  container.innerHTML = groups.map(group => {
+    const label = group.nameZh ? `${esc(group.name)} ${esc(group.nameZh)}` : esc(group.name);
+
+    if (group.selection === 'multi') {
+      return `
+        <div class="modifier-section">
+          <span class="modifier-label">${label}</span>
+          ${group.options.map(o => `
+            <div class="addon-row" id="opt-${o.id}" onclick="toggleOption(${group.id}, ${o.id})">
+              <span style="font-size:0.85rem; font-weight:500;">${esc(o.name)}${o.nameZh ? ' ' + esc(o.nameZh) : ''}</span>
+              <span style="font-size:0.85rem; font-weight:700; color:var(--accent-color);">+ RM ${o.priceDelta.toFixed(2)}</span>
+            </div>
+          `).join('')}
+        </div>
+      `;
+    }
+
+    return `
+      <div class="modifier-section">
+        <span class="modifier-label">${label}</span>
+        <div class="modifier-options-grid">
+          ${group.options.map(o => {
+            const active = (selectedOptions.get(group.id) || new Set()).has(o.id);
+            const price = o.priceDelta ? ` (+RM ${o.priceDelta.toFixed(2)})` : '';
+            return `<div class="modifier-pill ${active ? 'active' : ''}" id="opt-${o.id}"
+                         onclick="selectOption(${group.id}, ${o.id})">${esc(o.name)}${o.nameZh ? ' ' + esc(o.nameZh) : ''}${price}</div>`;
+          }).join('')}
+        </div>
+      </div>
+    `;
+  }).join('');
 }
 
 function selectVariant(idx) {
   selectedVariantIndex = idx;
-  
-  // Update UI active indicator
-  const pills = document.querySelectorAll('#modSizeContainer .modifier-pill');
-  pills.forEach(p => {
-    if (parseInt(p.getAttribute('data-variant-idx')) === idx) {
-      p.classList.add('active');
-    } else {
-      p.classList.remove('active');
-    }
+  document.querySelectorAll('#modSizeContainer .modifier-pill').forEach(p => {
+    p.classList.toggle('active', Number(p.dataset.variantIdx) === idx);
+  });
+  updateModifiersPriceTally();
+}
+
+// Single-select: replaces whatever was chosen in that group.
+function selectOption(groupId, optionId) {
+  const group = (activeItemForCustomization.modifierGroups || []).find(g => g.id === groupId);
+  if (!group) return;
+
+  group.options.forEach(o => {
+    const el = document.getElementById('opt-' + o.id);
+    if (el) el.classList.toggle('active', o.id === optionId);
   });
 
+  selectedOptions.set(groupId, new Set([optionId]));
   updateModifiersPriceTally();
 }
 
-function selectIce(el) {
-  selectedIce = el.getAttribute('data-ice');
-  
-  const pills = el.parentElement.querySelectorAll('.modifier-pill');
-  pills.forEach(p => p.classList.remove('active'));
-  el.classList.add('active');
+// Multi-select: toggles one option on or off.
+function toggleOption(groupId, optionId) {
+  const chosen = selectedOptions.get(groupId) || new Set();
+  if (chosen.has(optionId)) chosen.delete(optionId);
+  else chosen.add(optionId);
+  selectedOptions.set(groupId, chosen);
+
+  const el = document.getElementById('opt-' + optionId);
+  if (el) el.classList.toggle('active', chosen.has(optionId));
+  updateModifiersPriceTally();
 }
 
-function selectSugar(el) {
-  selectedSugar = el.getAttribute('data-sugar');
-  
-  const pills = el.parentElement.querySelectorAll('.modifier-pill');
-  pills.forEach(p => p.classList.remove('active'));
-  el.classList.add('active');
+function chosenOptionIds() {
+  const ids = [];
+  for (const set of selectedOptions.values()) ids.push(...set);
+  return ids;
 }
 
-function selectTeaBase(el) {
-  selectedTeaBase = el.getAttribute('data-base');
-  
-  const pills = el.parentElement.querySelectorAll('.modifier-pill');
-  pills.forEach(p => p.classList.remove('active'));
-  el.classList.add('active');
-}
-
-function toggleAddon(type) {
-  if (type === 'crystalBoba') {
-    selectedAddons.crystalBoba = !selectedAddons.crystalBoba;
-    document.getElementById('addonCrystalBoba')
-      .classList.toggle('active', selectedAddons.crystalBoba);
-  }
-
-  if (type === 'extraEspresso') {
-    selectedAddons.extraEspresso = !selectedAddons.extraEspresso;
-    const row = document.getElementById('addonExtraEspresso');
-    if (selectedAddons.extraEspresso) {
-      row.classList.add('active');
-    } else {
-      row.classList.remove('active');
+function chosenOptionObjects() {
+  const groups = (activeItemForCustomization && activeItemForCustomization.modifierGroups) || [];
+  const out = [];
+  for (const group of groups) {
+    for (const id of (selectedOptions.get(group.id) || new Set())) {
+      const option = group.options.find(o => o.id === id);
+      if (option) out.push({ group, option });
     }
   }
-  updateModifiersPriceTally();
+  return out;
 }
 
-function selectMatchaUpgrade(el) {
-  selectedAddons.nikoNekoUpgrade = el.getAttribute('data-matcha');
-  
-  const pills = el.parentElement.querySelectorAll('.modifier-pill');
-  pills.forEach(p => p.classList.remove('active'));
-  el.classList.add('active');
-  
-  updateModifiersPriceTally();
-}
-
-function resetModifierPillSelection(sectionId, activeValue, attrName) {
-  const container = document.getElementById(sectionId);
-  const pills = container.querySelectorAll('.modifier-pill');
-  pills.forEach(p => {
-    if (p.getAttribute(`data-${attrName}`) === activeValue) {
-      p.classList.add('active');
-    } else {
-      p.classList.remove('active');
-    }
-  });
-}
-
-// Compute dynamic price tally
 function updateModifiersPriceTally() {
   if (!activeItemForCustomization) return;
-
-  const basePrice = activeItemForCustomization.variants[selectedVariantIndex].price;
-  let addonCharge = 0;
-
-  if (BOBA_CATEGORIES.includes(activeItemForCustomization.category) && selectedAddons.crystalBoba) {
-    addonCharge += 2.00;
-  }
-
-  if (activeItemForCustomization.category === 'Coffee' && selectedAddons.extraEspresso) {
-    addonCharge += 2.50;
-  }
-
-  if (activeItemForCustomization.category === 'Matcha') {
-    const upgrade = selectedAddons.nikoNekoUpgrade;
-    if (upgrade === 'yuri') addonCharge += 2.00;
-    else if (upgrade === 'ajisai') addonCharge += 3.00;
-  }
-
-  const finalPrice = basePrice + addonCharge;
-  document.getElementById('addToCartConfirmBtn').innerText = `Add to Cart (RM ${finalPrice.toFixed(2)})`;
+  const base = activeItemForCustomization.variants[selectedVariantIndex].price;
+  const extra = chosenOptionObjects().reduce((sum, c) => sum + c.option.priceDelta, 0);
+  document.getElementById('addToCartConfirmBtn').innerText =
+    `Add to Cart (RM ${(base + extra).toFixed(2)})`;
 }
 
-// -------------------------------------------------------------
-// Cart Manager (Modified to Hash-Based line items)
-// -------------------------------------------------------------
+function closeModifiersModal() {
+  document.getElementById('modifiersModalOverlay').classList.remove('open');
+  document.body.style.overflow = '';
+  activeItemForCustomization = null;
+  selectedOptions = new Map();
+}
+
 function confirmAddToCart() {
   if (!activeItemForCustomization) return;
 
   const item = activeItemForCustomization;
   const variant = item.variants[selectedVariantIndex];
+  const optionIds = chosenOptionIds().sort((a, b) => a - b);
 
-  // Hash key representation (includes selectedTeaBase to distinguish options)
-  const hashUid = `${item.id}-${selectedVariantIndex}-${selectedIce.replace(/\s+/g, '')}-${selectedSugar.replace(/\s+/g, '')}-${selectedAddons.crystalBoba}-${selectedAddons.extraEspresso}-${selectedAddons.nikoNekoUpgrade}-${selectedTeaBase || 'none'}`;
+  // Two lines merge only when the drink, size and every option match.
+  const uid = `${item.id}-${variant.id}-${optionIds.join('.')}`;
+  const existing = cart.find(c => c.uid === uid);
 
-  // Check if identical item configuration exists
-  const existing = cart.find(c => c.uid === hashUid);
-  
   if (existing) {
     existing.quantity++;
   } else {
     cart.push({
-      uid: hashUid,
+      uid,
       id: item.id,
-      variantIndex: selectedVariantIndex,
-      ice: selectedIce,
-      sugar: selectedSugar,
-      teaBase: selectedTeaBase,
-      addons: { ...selectedAddons },
+      variantId: variant.id,
+      variantName: variant.name,
+      optionIds,
       quantity: 1
     });
   }
@@ -490,8 +465,7 @@ function confirmAddToCart() {
   saveCartToStorage();
   updateCartBadge();
   closeModifiersModal();
-  
-  // Float Badge animation
+
   const badge = document.getElementById('cartBadge');
   badge.classList.remove('bounce-anim');
   void badge.offsetWidth;
@@ -578,38 +552,12 @@ function renderCartDrawer() {
   let total = 0;
 
   itemsContainer.innerHTML = cart.map(cartItem => {
-    const item = menuData.find(m => m.id === cartItem.id);
-    if (!item) return '';
-    
-    const variant = item.variants[cartItem.variantIndex];
-    let unitPrice = variant.price;
-    let addonsTextList = [];
+    const line = resolveCartLine(cartItem);
+    if (!line) return '';
 
-    if (BOBA_CATEGORIES.includes(item.category) && cartItem.addons.crystalBoba) {
-      unitPrice += 2.00;
-      addonsTextList.push("Crystal Boba (+RM2.00)");
-    }
-    if (item.category === 'Coffee' && cartItem.addons.extraEspresso) {
-      unitPrice += 2.50;
-      addonsTextList.push("Extra Espresso Shot (+RM2.50)");
-    }
-    if (item.category === 'Matcha' && cartItem.addons.nikoNekoUpgrade !== 'none') {
-      const upgrade = cartItem.addons.nikoNekoUpgrade;
-      if (upgrade === 'yuri') {
-        unitPrice += 2.00;
-        addonsTextList.push("Niko Neko Yuri (+RM2.00)");
-      } else if (upgrade === 'ajisai') {
-        unitPrice += 3.00;
-        addonsTextList.push("Niko Neko Ajisai (+RM3.00)");
-      }
-    }
-
+    const { item, unitPrice, optionsText } = line;
     const itemTotal = unitPrice * cartItem.quantity;
     total += itemTotal;
-
-    const teaBaseString = cartItem.teaBase ? ` [${cartItem.teaBase}]` : '';
-    const addonsString = addonsTextList.length ? ` | ${addonsTextList.join(', ')}` : '';
-    const optionsText = `${variant.name}${teaBaseString} | ${cartItem.ice} | ${cartItem.sugar}${addonsString}`;
 
     const lineSoldOut = item.available === false;
 
@@ -934,16 +882,12 @@ function handleDetailsStepSubmit() {
 
 // Compute checkout amount totals
 function getCartTotalAmount() {
+  // Previously this recomputed prices by hand and forgot Crystal Boba, so the
+  // QR amount could be under the real total. It now shares the cart's resolver.
   let total = 0;
   cart.forEach(cartItem => {
-    const item = menuData.find(m => m.id === cartItem.id);
-    if (!item) return;
-    const variant = item.variants[cartItem.variantIndex];
-    let price = variant.price;
-    if (item.category === 'Coffee' && cartItem.addons.extraEspresso) price += 2.50;
-    if (item.category === 'Matcha' && cartItem.addons.nikoNekoUpgrade === 'yuri') price += 2.00;
-    if (item.category === 'Matcha' && cartItem.addons.nikoNekoUpgrade === 'ajisai') price += 3.00;
-    total += price * cartItem.quantity;
+    const line = resolveCartLine(cartItem);
+    if (line) total += line.unitPrice * cartItem.quantity;
   });
   return total;
 }
@@ -1029,13 +973,11 @@ async function submitFinalOrder() {
   const notes = document.getElementById('customerNotes').value.trim();
 
   // Parse items with full modifiers payloads
+  // Only ids travel; every price is resolved server-side from the menu.
   const itemsPayload = cart.map(c => ({
     id: c.id,
-    variantIndex: c.variantIndex,
-    ice: c.ice,
-    sugar: c.sugar,
-    teaBase: c.teaBase,
-    addons: { ...c.addons },
+    variantId: c.variantId,
+    optionIds: c.optionIds || [],
     quantity: c.quantity
   }));
 
@@ -1193,16 +1135,18 @@ function updateTrackingUI() {
 
   const itemsContainer = document.getElementById('trackReceiptItems');
   itemsContainer.innerHTML = activeOrder.items.map(item => {
-    const addonLabel = item.addonsText ? `<br><span style="font-size:0.75rem; color:var(--text-muted);">➕ ${esc(item.addonsText)}</span>` : '';
-    const baseLabel = item.teaBase ? ` [${item.teaBase}]` : '';
+    // Modifiers now arrive as one prepared string from the server.
+    const modifierLine = item.modifiersText
+      ? `<br><span style="font-size:0.75rem; color:var(--text-muted);">${esc(item.modifiersText)}</span>`
+      : '';
     return `
       <div class="receipt-row" style="flex-direction:column; align-items:flex-start; gap:0.15rem;">
         <div style="display:flex; justify-content:space-between; width:100%; font-weight:500;">
           <span>${esc(item.name)} <strong style="color:var(--text-muted);">x${esc(item.quantity)}</strong></span>
           <span>RM ${(item.price * item.quantity).toFixed(2)}</span>
         </div>
-        <span style="font-size:0.75rem; color:var(--text-secondary);">Modifiers: ${esc(item.variantName)}${esc(baseLabel)} | ${esc(item.ice)} | ${esc(item.sugar)}</span>
-        ${addonLabel}
+        <span style="font-size:0.75rem; color:var(--text-secondary);">${esc(item.variantName)}</span>
+        ${modifierLine}
       </div>
     `;
   }).join('');

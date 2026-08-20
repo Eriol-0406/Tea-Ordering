@@ -189,63 +189,8 @@
       </div>
 
       <!-- Tea Base Customization (For Lemon Tea [DaHongPao/White Peach]) -->
-      <div class="modifier-section" id="modTeaBaseSection" style="display: none;">
-        <span class="modifier-label">Tea Base (茶底)</span>
-        <div class="modifier-options-grid">
-          <div class="modifier-pill active" data-base="Da Hong Pao (大红袍)" onclick="selectTeaBase(this)">Da Hong Pao</div>
-          <div class="modifier-pill" data-base="White Peach (白桃乌龙)" onclick="selectTeaBase(this)">White Peach</div>
-        </div>
-      </div>
-
-      <!-- Ice Customization -->
-      <div class="modifier-section" id="modIceSection">
-        <span class="modifier-label">Ice Level</span>
-        <div class="modifier-options-grid">
-          <div class="modifier-pill active" data-ice="Normal Ice" onclick="selectIce(this)">Normal 正常</div>
-          <div class="modifier-pill" data-ice="Less Ice" onclick="selectIce(this)">Less Ice 少冰</div>
-          <div class="modifier-pill" data-ice="No Ice" onclick="selectIce(this)">No Ice 去冰</div>
-        </div>
-      </div>
-
-      <!-- Sugar Customization -->
-      <div class="modifier-section" id="modSugarSection">
-        <span class="modifier-label">Sugar Level</span>
-        <div class="modifier-options-grid">
-          <div class="modifier-pill active" data-sugar="Normal Sugar" onclick="selectSugar(this)">Normal 正常</div>
-          <div class="modifier-pill" data-sugar="Less Sugar" onclick="selectSugar(this)">Less 少糖 (70%)</div>
-          <div class="modifier-pill" data-sugar="Half Sugar" onclick="selectSugar(this)">Half 半糖 (50%)</div>
-          <div class="modifier-pill" data-sugar="Slight Sugar" onclick="selectSugar(this)">Slight 微糖 (30%)</div>
-          <div class="modifier-pill" data-sugar="No Sugar" onclick="selectSugar(this)">No Sugar 无糖</div>
-        </div>
-      </div>
-
-      <!-- Crystal Boba: general add-on across the tea range -->
-      <div class="modifier-section" id="modBobaAddonSection" style="display: none;">
-        <span class="modifier-label">Add On 附加</span>
-        <div class="addon-row" id="addonCrystalBoba" onclick="toggleAddon('crystalBoba')">
-          <span style="font-size: 0.85rem; font-weight: 500;">🧋 Crystal Boba 晶露波波</span>
-          <span style="font-size: 0.85rem; font-weight: 700; color: var(--accent-color);">+ RM 2.00</span>
-        </div>
-      </div>
-
-      <!-- Coffee Extra Espresso Addon -->
-      <div class="modifier-section" id="modCoffeeAddonSection" style="display: none;">
-        <span class="modifier-label">Coffee Extras</span>
-        <div class="addon-row" id="addonExtraEspresso" onclick="toggleAddon('extraEspresso')">
-          <span style="font-size: 0.85rem; font-weight: 500;">☕ Extra Espresso Shot</span>
-          <span style="font-size: 0.85rem; font-weight: 700; color: var(--accent-color);">+ RM 2.50</span>
-        </div>
-      </div>
-
-      <!-- Matcha Upgrade Addon -->
-      <div class="modifier-section" id="modMatchaAddonSection" style="display: none;">
-        <span class="modifier-label">Niko Neko Matcha Grade Upgrade</span>
-        <div class="modifier-options-grid">
-          <div class="modifier-pill active" data-matcha="none" onclick="selectMatchaUpgrade(this)">None</div>
-          <div class="modifier-pill" data-matcha="yuri" onclick="selectMatchaUpgrade(this)">Yuri (+RM 2)</div>
-          <div class="modifier-pill" data-matcha="ajisai" onclick="selectMatchaUpgrade(this)">Ajisai (+RM 3)</div>
-        </div>
-      </div>
+      <!-- Modifier groups, rendered from the menu database -->
+      <div id="modGroupsContainer"></div>
 
       <!-- Add to selection CTA -->
       <button class="btn btn-primary" style="width: 100%; margin-top: 0.5rem;" id="addToCartConfirmBtn" onclick="confirmAddToCart()">

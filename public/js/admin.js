@@ -306,10 +306,9 @@ function renderOrdersQueue() {
         <!-- Customizable drink lists formatted for the kitchen -->
         <div class="order-card-items-list" style="display:flex; flex-direction:column; gap:0.5rem;">
           ${order.items.map(item => {
-            const addonLabel = item.addonsText 
-              ? `<div style="font-size:0.75rem; color: var(--accent-color); margin-top:0.1rem;">➕ Upgrades: ${esc(item.addonsText)}</div>` 
+            const modifierLine = item.modifiersText
+              ? `<div style="font-size:0.75rem; color: var(--accent-color); margin-top:0.1rem;">${esc(item.modifiersText)}</div>`
               : '';
-            const baseLabel = item.teaBase ? ` [${item.teaBase}]` : '';
             return `
               <div class="admin-order-item-row" style="flex-direction:column; align-items:flex-start; border-bottom: 1px dashed rgba(255,255,255,0.04); padding-bottom: 0.4rem; margin-bottom: 0.2rem;">
                 <div style="display:flex; justify-content:space-between; width:100%; font-weight:600;">
@@ -317,9 +316,9 @@ function renderOrdersQueue() {
                   <span>RM ${(item.price * item.quantity).toFixed(2)}</span>
                 </div>
                 <div style="font-size:0.75rem; color:var(--text-secondary); margin-top:0.1rem;">
-                  Options: ${esc(item.variantName)}${esc(baseLabel)} | ${esc(item.ice)} | ${esc(item.sugar)}
+                  ${esc(item.variantName)}
                 </div>
-                ${addonLabel}
+                ${modifierLine}
               </div>
             `;
           }).join('')}
