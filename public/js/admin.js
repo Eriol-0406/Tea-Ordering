@@ -621,14 +621,16 @@ function renderMenuAdmin() {
           ${esc(category)} <span style="opacity:0.6;">· ${esc(company)}</span>
         </div>
         ${items.map(item => `
-          <div class="stock-row ${item.available === false ? 'is-out' : ''} ${item.isActive === false ? 'is-hidden' : ''}">
+          <div class="stock-row ${item.available === false ? 'is-out' : ''} ${item.isActive === false || item.expired ? 'is-hidden' : ''}">
+            ${item.image ? `<img class="stock-thumb" src="${esc(item.image)}" alt="" loading="lazy">` : '<div class="stock-thumb placeholder">🥤</div>'}
             <div class="stock-name">
               ${esc(item.name)}
               <span class="stock-state">
                 ${item.variants.map(v => esc(v.name) + ' RM' + v.price.toFixed(2)).join(' · ')}
               </span>
               <span class="stock-state">
-                ${item.isActive === false ? '⚠️ Hidden from customers · ' : ''}${item.available === false ? 'Sold out' : 'Available'}
+                ${item.isActive === false ? '⚠️ Hidden · ' : ''}${item.expired ? '📅 Season ended · ' : ''}${item.available === false ? 'Sold out' : 'Available'}
+                ${item.availableUntil && !item.expired ? ' · until ' + esc(item.availableUntil) : ''}
               </span>
             </div>
             <div class="stock-actions">
@@ -706,6 +708,85 @@ function field(label, id, value, type) {
 }
 
 // -------------------------------------------------------------
+// Image upload
+//
+// Phone photos are several megabytes; the menu displays them barely 200px
+// wide. Resizing on the device keeps uploads small and the database tidy.
+// -------------------------------------------------------------
+const IMAGE_MAX_EDGE = 700;
+
+function resizeImageFile(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Could not read that file'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('That file is not an image'));
+      img.onload = () => {
+        const scale = Math.min(1, IMAGE_MAX_EDGE / Math.max(img.width, img.height));
+        const width = Math.round(img.width * scale);
+        const height = Math.round(img.height * scale);
+
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+
+        // WebP where supported, JPEG otherwise. Transparent PNGs lose their
+        // background on JPEG, so those keep PNG.
+        const wantsAlpha = file.type === 'image/png';
+        const type = canvas.toDataURL('image/webp').startsWith('data:image/webp')
+          ? 'image/webp'
+          : (wantsAlpha ? 'image/png' : 'image/jpeg');
+
+        const dataUrl = canvas.toDataURL(type, 0.85);
+        resolve({
+          mimeType: type,
+          dataBase64: dataUrl.split(',')[1],
+          width,
+          height,
+          previewUrl: dataUrl
+        });
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+async function handleImagePick(input) {
+  const file = input.files && input.files[0];
+  if (!file) return;
+
+  const status = document.getElementById('dlgImageStatus');
+  status.innerText = 'Processing...';
+  try {
+    const resized = await resizeImageFile(file);
+    const kb = Math.round(resized.dataBase64.length * 0.75 / 1024);
+
+    const data = await adminJson('/api/admin/images', 'POST', {
+      mimeType: resized.mimeType,
+      dataBase64: resized.dataBase64,
+      width: resized.width,
+      height: resized.height
+    });
+
+    document.getElementById('dlgImageId').value = data.id;
+    document.getElementById('dlgImagePreview').src = resized.previewUrl;
+    document.getElementById('dlgImagePreview').style.display = 'block';
+    status.innerText = `Uploaded · ${resized.width}x${resized.height} · ${kb}KB`;
+  } catch (err) {
+    status.innerText = err.message;
+  }
+}
+
+function clearItemImage() {
+  document.getElementById('dlgImageId').value = '';
+  document.getElementById('dlgImagePreview').style.display = 'none';
+  document.getElementById('dlgImageStatus').innerText = 'No picture';
+}
+
+// -------------------------------------------------------------
 // Item editor
 // -------------------------------------------------------------
 function openItemEditor(itemId) {
@@ -730,7 +811,28 @@ function openItemEditor(itemId) {
       <span>Category</span>
       <select class="input-field" id="dlgCategory">${categoryOptions}</select>
     </label>
-    ${field('Image path (optional)', 'dlgImage', item ? (item.image || '') : '')}
+    <label class="dialog-field">
+      <span>Picture</span>
+      <div class="image-picker">
+        <img id="dlgImagePreview" class="image-preview"
+             src="${item && item.image ? esc(item.image) : ''}"
+             style="display:${item && item.image ? 'block' : 'none'};" alt="">
+        <div class="image-picker-controls">
+          <input type="file" id="dlgImageFile" accept="image/*" onchange="handleImagePick(this)" style="display:none;">
+          <button class="btn btn-secondary stock-btn" onclick="document.getElementById('dlgImageFile').click()">Choose picture</button>
+          <button class="btn btn-secondary stock-btn" onclick="clearItemImage()">Remove</button>
+          <span id="dlgImageStatus" class="image-status">${item && item.image ? 'Current picture' : 'No picture'}</span>
+        </div>
+      </div>
+      <input type="hidden" id="dlgImageId" value="${item && item.imageId ? item.imageId : ''}">
+    </label>
+
+    <div class="season-row">
+      ${field('Available from (optional)', 'dlgFrom', item ? (item.availableFrom || '') : '', 'date')}
+      ${field('Available until (optional)', 'dlgUntil', item ? (item.availableUntil || '') : '', 'date')}
+    </div>
+    <p class="dialog-hint">Leave the dates blank for a permanent drink. A seasonal
+       drink disappears from the customer menu by itself once the end date passes.</p>
     <label class="dialog-field" style="margin-top:0.5rem;">
       <span>Sizes and prices</span>
     </label>
@@ -747,11 +849,14 @@ function openItemEditor(itemId) {
 
     if (!variants.length) throw new Error('Add at least one size');
 
+    const imageId = document.getElementById('dlgImageId').value;
     const payload = {
       name: document.getElementById('dlgName').value.trim(),
       description: document.getElementById('dlgDesc').value.trim(),
       categoryId: document.getElementById('dlgCategory').value,
-      imageUrl: document.getElementById('dlgImage').value.trim(),
+      imageId: imageId ? Number(imageId) : null,
+      availableFrom: document.getElementById('dlgFrom').value,
+      availableUntil: document.getElementById('dlgUntil').value,
       variants
     };
     if (!payload.name) throw new Error('A drink name is required');
@@ -764,7 +869,8 @@ function openItemEditor(itemId) {
     const activeBox = document.getElementById('dlgActive');
     await adminJson(`/api/admin/menu/items/${item.id}`, 'PATCH', {
       name: payload.name, description: payload.description,
-      categoryId: payload.categoryId, imageUrl: payload.imageUrl,
+      categoryId: payload.categoryId, imageId: payload.imageId,
+      availableFrom: payload.availableFrom, availableUntil: payload.availableUntil,
       isActive: activeBox ? activeBox.checked : true
     });
 

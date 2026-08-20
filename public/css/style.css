@@ -2192,3 +2192,70 @@ h1, h2, h3, h4, h5, h6 {
   border-radius: 10px;
   padding: 0.5rem 0.7rem;
 }
+
+/* -------------------------------------------------------------
+   Image picker and seasonal fields
+   ------------------------------------------------------------- */
+.stock-thumb {
+  width: 44px;
+  height: 44px;
+  border-radius: 8px;
+  object-fit: contain;
+  background: var(--surface-sunken);
+  flex-shrink: 0;
+  margin-right: 0.7rem;
+}
+
+.stock-thumb.placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.2rem;
+  opacity: 0.5;
+}
+
+.image-picker {
+  display: flex;
+  gap: 0.7rem;
+  align-items: flex-start;
+}
+
+.image-preview {
+  width: 74px;
+  height: 74px;
+  object-fit: contain;
+  border-radius: 10px;
+  background: var(--surface-sunken);
+  border: 1px solid var(--panel-border);
+  flex-shrink: 0;
+}
+
+.image-picker-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.image-status {
+  width: 100%;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.season-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.6rem;
+}
+
+.dialog-hint {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  margin: -0.2rem 0 0.6rem;
+  line-height: 1.4;
+}
+
+@media (max-width: 420px) {
+  .season-row { grid-template-columns: 1fr; }
+}

@@ -48,6 +48,7 @@ const ENABLE_MOCK_GPS = process.env.ENABLE_MOCK_GPS === 'true' || process.env.NO
 const TRUST_PROXY = process.env.TRUST_PROXY || '0';
 app.set('trust proxy', /^\d+$/.test(TRUST_PROXY) ? parseInt(TRUST_PROXY, 10) : TRUST_PROXY);
 
+app.use('/api/admin/images', express.json({ limit: '3mb' }));
 app.use(express.json({ limit: '100kb' }));
 // Filenames are not content-hashed, so only images (which rarely change and
 // carry the real page weight) get a long cache. HTML/CSS/JS revalidate on every
@@ -318,6 +319,63 @@ app.get('/api/health', async (req, res) => {
     zones: ORDER_ZONES.map(z => z.name),
     menuItems: (await getMenu().catch(() => [])).length
   });
+});
+
+// Uploaded menu images. An id always refers to the same bytes, so this can be
+// cached aggressively; replacing a picture creates a new id.
+app.get('/api/images/:id', async (req, res, next) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id)) return res.status(400).end();
+
+    const image = await store.getImage(id);
+    if (!image) return res.status(404).end();
+
+    res.setHeader('Content-Type', image.mimeType);
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    res.send(image.bytes);
+  } catch (err) { next(err); }
+});
+
+const ALLOWED_IMAGE_TYPES = ['image/webp', 'image/jpeg', 'image/png'];
+const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
+
+app.post('/api/admin/images', requireAdmin, async (req, res, next) => {
+  try {
+    const { mimeType, dataBase64, width, height } = req.body || {};
+
+    if (!ALLOWED_IMAGE_TYPES.includes(mimeType)) {
+      return res.status(400).json({ error: 'Images must be WebP, JPEG or PNG' });
+    }
+    if (typeof dataBase64 !== 'string' || !dataBase64) {
+      return res.status(400).json({ error: 'No image data received' });
+    }
+
+    const buffer = Buffer.from(dataBase64, 'base64');
+    if (!buffer.length) return res.status(400).json({ error: 'Image data could not be read' });
+    if (buffer.length > MAX_IMAGE_BYTES) {
+      return res.status(413).json({ error: 'That image is too large even after resizing' });
+    }
+
+    // Trust the bytes, not the declared type: check the file signature.
+    const sig = buffer.subarray(0, 12);
+    const isPng  = sig[0] === 0x89 && sig[1] === 0x50 && sig[2] === 0x4E && sig[3] === 0x47;
+    const isJpeg = sig[0] === 0xFF && sig[1] === 0xD8 && sig[2] === 0xFF;
+    const isWebp = sig.subarray(0, 4).toString('ascii') === 'RIFF' &&
+                   sig.subarray(8, 12).toString('ascii') === 'WEBP';
+    if (!isPng && !isJpeg && !isWebp) {
+      return res.status(400).json({ error: 'That file is not a valid image' });
+    }
+
+    const id = await store.saveImage({
+      mimeType,
+      buffer,
+      width: parseInt(width, 10) || null,
+      height: parseInt(height, 10) || null
+    });
+    invalidateMenuCache();
+    res.status(201).json({ success: true, id, url: `/api/images/${id}` });
+  } catch (err) { next(err); }
 });
 
 // 1. Get restaurant menu, annotated with what is currently sold out
@@ -698,6 +756,20 @@ app.post('/api/admin/menu/:id/availability', requireAdmin, async (req, res, next
 // ---------------------------------------------------------------
 const PRICE_MAX = 999.99;
 
+// Seasonal window. Blank clears the date rather than leaving it unchanged, so a
+// drink can be made permanent again.
+function readSeason(body) {
+  const out = {};
+  const isDate = v => /^\d{4}-\d{2}-\d{2}$/.test(v);
+  if (body?.availableFrom !== undefined) {
+    out.availableFrom = isDate(body.availableFrom) ? body.availableFrom : null;
+  }
+  if (body?.availableUntil !== undefined) {
+    out.availableUntil = isDate(body.availableUntil) ? body.availableUntil : null;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
 function readPrice(value) {
   const n = Number(value);
   if (!Number.isFinite(n) || n < 0 || n > PRICE_MAX) return null;
@@ -738,6 +810,9 @@ app.post('/api/admin/menu/items', requireAdmin, async (req, res, next) => {
     }
 
     const id = await store.createItem({ categoryId, name, description, imageUrl, variants: clean });
+    const season = readSeason(req.body);
+    if (season) await store.updateItem(id, season);
+    if (req.body?.imageId) await store.updateItem(id, { imageId: parseInt(req.body.imageId, 10) });
     invalidateMenuCache();
     res.status(201).json({ success: true, id });
   } catch (err) { next(err); }
@@ -751,6 +826,10 @@ app.patch('/api/admin/menu/items/:id', requireAdmin, async (req, res, next) => {
     if (req.body?.imageUrl !== undefined) fields.imageUrl = cleanText(req.body.imageUrl, 300) || null;
     if (req.body?.categoryId !== undefined) fields.categoryId = parseInt(req.body.categoryId, 10);
     if (req.body?.isActive !== undefined) fields.isActive = !!req.body.isActive;
+    if (req.body?.imageId !== undefined) {
+      fields.imageId = req.body.imageId === null ? null : parseInt(req.body.imageId, 10);
+    }
+    Object.assign(fields, readSeason(req.body) || {});
 
     if (fields.name === '') return res.status(400).json({ error: 'A drink name is required' });
 

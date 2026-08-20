@@ -23,6 +23,13 @@ const MISSING_URL_MESSAGE =
 // string concatenation the first time anything added them up.
 types.setTypeParser(1700, parseFloat);
 
+// DATE (1082) is a calendar day with no time or zone. The driver's default is
+// to build a JS Date at *local* midnight, which then shifts to the previous day
+// when read back as UTC anywhere east of Greenwich - Malaysia is UTC+8, so
+// every seasonal date came back a day early. Keep it as the plain string
+// Postgres already sends.
+types.setTypeParser(1082, value => value);
+
 // The pool is built on first use rather than at import. Throwing while a
 // serverless platform is importing the module takes down every route with an
 // opaque FUNCTION_INVOCATION_FAILED; failing at query time instead surfaces a
@@ -49,6 +56,13 @@ function getPool() {
 }
 
 const query = (text, params) => getPool().query(text, params);
+
+// Today in the server's local calendar, matching how Postgres reads CURRENT_DATE.
+function todayIso() {
+  const now = new Date();
+  const offset = now.getTimezoneOffset() * 60000;
+  return new Date(now.getTime() - offset).toISOString().slice(0, 10);
+}
 
 // -------------------------------------------------------------
 // Row <-> app object mapping
@@ -247,10 +261,16 @@ module.exports = {
   // multiply rows across variants x options and need de-duplicating.
   // -----------------------------------------------------------
   async getMenu({ includeInactive = false } = {}) {
-    const activeOnly = includeInactive ? '' : 'AND i.is_active AND c.is_active';
+    // Out-of-season drinks disappear from the customer menu on their own.
+    // Staff still see them, flagged, so they can be brought back next year.
+    const activeOnly = includeInactive ? '' : `
+      AND i.is_active AND c.is_active
+      AND (i.available_from  IS NULL OR i.available_from  <= CURRENT_DATE)
+      AND (i.available_until IS NULL OR i.available_until >= CURRENT_DATE)`;
 
     const [items, variants, groups, options, catLinks, itemLinks, soldOut] = await Promise.all([
-      query(`SELECT i.id, i.name, i.description, i.image_url, i.sort_order, i.is_active,
+      query(`SELECT i.id, i.name, i.description, i.image_url, i.image_id,
+                    i.available_from, i.available_until, i.sort_order, i.is_active,
                     c.id AS category_id, c.name AS category, c.name_zh AS category_zh,
                     c.sort_order AS category_sort, co.code AS company
                FROM menu_items i
@@ -328,7 +348,13 @@ module.exports = {
         categoryZh: row.category_zh,
         categoryId: row.category_id,
         company: row.company,
-        image: row.image_url || undefined,
+        // Uploaded images win over the legacy file path.
+        image: row.image_id ? `/api/images/${row.image_id}` : (row.image_url || undefined),
+        imageId: row.image_id ? Number(row.image_id) : null,
+        availableFrom: row.available_from || null,
+        availableUntil: row.available_until || null,
+        // Both sides are YYYY-MM-DD, so a string comparison is a date comparison.
+        expired: !!(row.available_until && row.available_until < todayIso()),
         sortOrder: row.sort_order,
         isActive: row.is_active,
         available: !soldOutIds.has(row.id),
@@ -389,7 +415,9 @@ module.exports = {
     const params = [id];
     const map = {
       name: 'name', description: 'description', imageUrl: 'image_url',
-      categoryId: 'category_id', isActive: 'is_active', sortOrder: 'sort_order'
+      imageId: 'image_id', availableFrom: 'available_from',
+      availableUntil: 'available_until', categoryId: 'category_id',
+      isActive: 'is_active', sortOrder: 'sort_order'
     };
     for (const [key, column] of Object.entries(map)) {
       if (fields[key] === undefined) continue;
@@ -557,6 +585,26 @@ module.exports = {
     } finally {
       client.release();
     }
+  },
+
+  // -----------------------------------------------------------
+  // Uploaded images
+  // -----------------------------------------------------------
+  async saveImage({ mimeType, buffer, width, height }) {
+    const { rows } = await query(
+      `INSERT INTO menu_images (mime_type, bytes, byte_size, width, height)
+       VALUES ($1,$2,$3,$4,$5) RETURNING id`,
+      [mimeType, buffer, buffer.length, width || null, height || null]
+    );
+    return Number(rows[0].id);
+  },
+
+  async getImage(id) {
+    const { rows } = await query(
+      'SELECT mime_type, bytes FROM menu_images WHERE id = $1', [id]
+    );
+    if (!rows.length) return null;
+    return { mimeType: rows[0].mime_type, bytes: rows[0].bytes };
   },
 
   // -----------------------------------------------------------
