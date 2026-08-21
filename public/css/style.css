@@ -2444,3 +2444,141 @@ h1, h2, h3, h4, h5, h6 {
   .till-layout { grid-template-columns: 1fr; }
   .till-bill { position: static; }
 }
+
+/* -------------------------------------------------------------
+   Icons
+   ------------------------------------------------------------- */
+.icon {
+  width: 1.15em;
+  height: 1.15em;
+  flex-shrink: 0;
+  vertical-align: -0.18em;
+  fill: none;
+  stroke: currentColor;
+}
+
+.icon-lg { width: 1.5em; height: 1.5em; }
+.icon-xl { width: 2em; height: 2em; }
+
+/* Buttons that pair an icon with a label */
+.btn .icon { margin-right: 0.1rem; }
+
+/* Icon-only button: square, no text crowding */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.icon-btn:hover { color: var(--danger); background: rgba(239, 95, 120, 0.1); }
+.icon-btn.subtle:hover { color: var(--accent-color); background: rgba(var(--accent-rgb), 0.1); }
+
+/* -------------------------------------------------------------
+   Sales reports
+   ------------------------------------------------------------- */
+.report-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.8rem;
+}
+
+.report-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.6rem;
+  margin-bottom: 1.2rem;
+}
+
+.report-card {
+  padding: 0.85rem;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--panel-border);
+  border-left: 3px solid var(--panel-border);
+}
+
+.report-card.accent { border-left-color: var(--accent-color); }
+.report-card.warn { border-left-color: var(--warning); }
+.report-card.danger { border-left-color: var(--danger); }
+
+.report-card-label {
+  display: block;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  margin-bottom: 0.3rem;
+}
+
+.report-card-value {
+  display: block;
+  font-family: var(--font-heading);
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
+.report-card.accent .report-card-value { color: var(--accent-color); }
+.report-card.warn .report-card-value { color: var(--warning); }
+.report-card.danger .report-card-value { color: var(--danger); }
+
+.report-block { margin-bottom: 1.4rem; }
+
+.report-block h4 {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  margin-bottom: 0.5rem;
+}
+
+.report-empty { font-size: 0.82rem; color: var(--text-muted); }
+
+.report-foot {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  text-align: center;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--panel-border);
+}
+
+/* Hourly bars: the shape of the trading day at a glance */
+.hour-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 130px;
+  padding: 0.5rem 0.25rem 0;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+  overflow-x: auto;
+}
+
+.hour-col {
+  flex: 1 0 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  height: 100%;
+  gap: 3px;
+}
+
+.hour-bar {
+  width: 100%;
+  max-width: 22px;
+  border-radius: 3px 3px 0 0;
+  background: var(--accent-gradient);
+  min-height: 3px;
+}
+
+.hour-label { font-size: 0.6rem; color: var(--text-muted); }

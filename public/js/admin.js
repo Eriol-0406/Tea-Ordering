@@ -29,6 +29,10 @@ async function readJsonOrExplain(res) {
   }
 }
 
+function iconMarkup(name, className) {
+  return `<svg class="icon ${className || ''}" aria-hidden="true"><use href="#i-${name}"></use></svg>`;
+}
+
 function esc(value) {
   if (value === null || value === undefined) return '';
   return String(value)
@@ -273,7 +277,7 @@ function renderOrdersQueue() {
     } else if (order.status === 'ready') {
       // Online orders are pending too until staff confirm the transfer landed.
       const payButton = (order.paymentStatus === 'pending')
-        ? `<button class="btn btn-success" onclick="markAsPaid('${esc(order.id)}')">💵 Paid</button>`
+        ? `<button class="btn btn-success" onclick="markAsPaid('${esc(order.id)}')">${iconMarkup('cash')} Paid</button>`
         : '';
       actionButtons = `
         ${payButton}
@@ -283,7 +287,7 @@ function renderOrdersQueue() {
 
     const riskClass = order.spamRisk.toLowerCase().replace(/\s+/g, '-');
     const distanceText = order.distance !== null ? `${order.distance} km` : 'Blocked Location';
-    const hasNote = order.notes ? `<div style="font-size:0.75rem; color: var(--text-muted); margin-top:0.25rem;">📝 Notes: ${esc(order.notes)}</div>` : '';
+    const hasNote = order.notes ? `<div style="font-size:0.75rem; color: var(--text-muted); margin-top:0.25rem;">${iconMarkup('note')} Notes: ${esc(order.notes)}</div>` : '';
 
     return `
       <div class="admin-order-card" id="card-${esc(order.id)}">
@@ -296,11 +300,11 @@ function renderOrdersQueue() {
         </div>
 
         <div class="order-card-meta">
-          <div class="meta-item">👤 <strong>${esc(order.customerName)}</strong></div>
-          <div class="meta-item">📞 ${esc(order.phone)}</div>
-          <div class="meta-item">📍 Proximity: ${esc(distanceText)}</div>
-          <div class="meta-item">🏷️ Zone: ${esc(order.zoneName || 'Outside zones')}</div>
-          <div class="meta-item">💻 IP: ${esc(order.ipAddress)}</div>
+          <div class="meta-item">${iconMarkup('user')} <strong>${esc(order.customerName)}</strong></div>
+          <div class="meta-item">${iconMarkup('phone')} ${esc(order.phone)}</div>
+          <div class="meta-item">${iconMarkup('pin')} Proximity: ${esc(distanceText)}</div>
+          <div class="meta-item">${iconMarkup('tag')} Zone: ${esc(order.zoneName || 'Outside zones')}</div>
+          <div class="meta-item">${iconMarkup('monitor')} IP: ${esc(order.ipAddress)}</div>
         </div>
 
         <!-- Customizable drink lists formatted for the kitchen -->
@@ -335,7 +339,7 @@ function renderOrdersQueue() {
         ${hasNote}
         
         <div style="font-size:0.75rem; color: var(--danger); padding-top:0.25rem; border-top:1px dashed rgba(255,255,255,0.05);">
-          🛡️ Proximity Audit: ${esc(order.riskReason)}
+          ${iconMarkup('shield')} Proximity Audit: ${esc(order.riskReason)}
         </div>
 
         <div class="order-card-actions">
@@ -469,7 +473,7 @@ function initMap() {
 
   L.marker([restaurantLocation.lat, restaurantLocation.lng], {
     icon: L.divIcon({
-      html: `<div style="font-size: 2.2rem; filter: drop-shadow(0 0 6px var(--accent-color));">✨</div>`,
+      html: `<div style="color: var(--accent-color); filter: drop-shadow(0 0 6px var(--accent-color));">${iconMarkup('pin', 'icon-xl')}</div>`,
       className: 'custom-div-icon',
       iconSize: [35, 35],
       iconAnchor: [17, 17]
@@ -494,21 +498,21 @@ function plotAllMarkers() {
 function plotOrderMarker(order) {
   if (!order.latitude || !order.longitude) return;
 
-  let iconHtml = '📍';
+  let markerIcon = 'pin';
   let color = 'var(--success)';
   
   if (order.spamRisk === 'Medium Risk') {
-    iconHtml = '⚠️';
+    markerIcon = 'alert';
     color = 'var(--warning)';
   } else if (order.spamRisk === 'High Risk') {
-    iconHtml = '🚨';
+    markerIcon = 'alert';
     color = 'var(--danger)';
   }
 
   const pulseClass = order.spamRisk === 'High Risk' ? 'animation: pulseScan 1.5s infinite;' : '';
 
   const pinIcon = L.divIcon({
-    html: `<div style="font-size: 1.6rem; filter: drop-shadow(0 0 5px ${color}); ${pulseClass}">${iconHtml}</div>`,
+    html: `<div style="font-size: 1.6rem; filter: drop-shadow(0 0 5px ${color}); ${pulseClass}">${iconMarkup(markerIcon, 'icon-lg')}</div>`,
     className: 'custom-div-icon',
     iconSize: [25, 25],
     iconAnchor: [12, 12]
@@ -582,6 +586,7 @@ function showView(name) {
   if (name === 'menu' || name === 'modifiers') loadMenuAdmin();
   if (name === 'till') loadTill();
   if (name === 'drawer') loadDrawer();
+  if (name === 'reports' && !document.getElementById('repFrom').value) setReportPreset('today');
   if (name === 'history' && !historyState.loaded) loadHistory(0);
   // Leaflet mis-measures while its panel is hidden, so re-measure on return.
   if (name === 'dashboard' && mapInstance) {
@@ -624,14 +629,14 @@ function renderMenuAdmin() {
         </div>
         ${items.map(item => `
           <div class="stock-row ${item.available === false ? 'is-out' : ''} ${item.isActive === false || item.expired ? 'is-hidden' : ''}">
-            ${item.image ? `<img class="stock-thumb" src="${esc(item.image)}" alt="" loading="lazy">` : '<div class="stock-thumb placeholder">🥤</div>'}
+            ${item.image ? `<img class="stock-thumb" src="${esc(item.image)}" alt="" loading="lazy">` : `<div class="stock-thumb placeholder">${iconMarkup("cup")}</div>`}
             <div class="stock-name">
               ${esc(item.name)}
               <span class="stock-state">
                 ${item.variants.map(v => esc(v.name) + ' RM' + v.price.toFixed(2)).join(' · ')}
               </span>
               <span class="stock-state">
-                ${item.isActive === false ? '⚠️ Hidden · ' : ''}${item.expired ? '📅 Season ended · ' : ''}${item.available === false ? 'Sold out' : 'Available'}
+                ${item.isActive === false ? iconMarkup('alert') + ' Hidden · ' : ''}${item.expired ? iconMarkup('calendar') + ' Season ended · ' : ''}${item.available === false ? 'Sold out' : 'Available'}
                 ${item.availableUntil && !item.expired ? ' · until ' + esc(item.availableUntil) : ''}
               </span>
             </div>
@@ -802,7 +807,7 @@ function openItemEditor(itemId) {
     <div class="variant-row" data-variant-id="${v.id || ''}">
       <input class="input-field" placeholder="Size or type" value="${esc(v.name || '')}" data-v-name>
       <input class="input-field" placeholder="0.00" type="number" step="0.10" min="0" value="${v.price === '' ? '' : v.price}" data-v-price>
-      <button class="btn btn-danger stock-btn" onclick="this.closest('.variant-row').remove()">✕</button>
+      <button class="btn btn-danger stock-btn" onclick="this.closest('.variant-row').remove()">${iconMarkup('close')}</button>
     </div>
   `).join('');
 
@@ -902,7 +907,7 @@ function addVariantRow() {
   row.innerHTML = `
     <input class="input-field" placeholder="Size or type" data-v-name>
     <input class="input-field" placeholder="0.00" type="number" step="0.10" min="0" data-v-price>
-    <button class="btn btn-danger stock-btn" onclick="this.closest('.variant-row').remove()">✕</button>`;
+    <button class="btn btn-danger stock-btn" onclick="this.closest('.variant-row').remove()">${iconMarkup('close')}</button>`;
   document.getElementById('dlgVariants').appendChild(row);
 }
 
@@ -947,7 +952,7 @@ function renderModifierAdmin() {
           </div>
           <div class="stock-actions">
             <button class="btn btn-secondary stock-btn" onclick="openOptionEditor(${group.id}, ${o.id})">Edit</button>
-            <button class="btn btn-danger stock-btn" onclick="deleteOption(${o.id})">✕</button>
+            <button class="btn btn-danger stock-btn" onclick="deleteOption(${o.id})">${iconMarkup('close')}</button>
           </div>
         </div>
       `).join('')}
@@ -1368,9 +1373,9 @@ function renderBill() {
       ${discount ? 'Change discount' : 'Add discount'}
     </button>
     <div class="pay-buttons">
-      <button class="btn btn-primary" onclick="openPayDialog('cash')" ${tillBill.length ? '' : 'disabled'}>💵 Cash</button>
-      <button class="btn btn-primary" onclick="openPayDialog('duitnow')" ${tillBill.length ? '' : 'disabled'}>📱 DuitNow</button>
-      <button class="btn btn-primary" onclick="openPayDialog('tng')" ${tillBill.length ? '' : 'disabled'}>🔵 TnG</button>
+      <button class="btn btn-primary" onclick="openPayDialog('cash')" ${tillBill.length ? '' : 'disabled'}>${iconMarkup('cash')} Cash</button>
+      <button class="btn btn-primary" onclick="openPayDialog('duitnow')" ${tillBill.length ? '' : 'disabled'}>${iconMarkup('qr')} DuitNow</button>
+      <button class="btn btn-primary" onclick="openPayDialog('tng')" ${tillBill.length ? '' : 'disabled'}>${iconMarkup('wallet')} TnG</button>
     </div>
   `;
 }
@@ -1577,4 +1582,171 @@ function openCloseDialog(expected) {
       : `Variance: RM ${v.toFixed(2)} (${v < 0 ? 'short' : 'over'})`);
     loadDrawer();
   });
+}
+
+// -------------------------------------------------------------
+// Sales reports
+//
+// Every figure is grouped in the shop's timezone by the server, so an
+// afternoon rush shows as the afternoon rather than in UTC.
+// -------------------------------------------------------------
+const PAYMENT_LABELS = {
+  cash: 'Cash', duitnow: 'DuitNow QR', tng: 'TnG eWallet',
+  counter: 'Pay at counter (unsettled)', online: 'Online (legacy)'
+};
+const ORDER_TYPE_LABELS = { dine_in: 'Dine in', takeaway: 'Takeaway', delivery: 'Delivery' };
+
+function shopToday(offsetDays) {
+  const d = new Date();
+  if (offsetDays) d.setDate(d.getDate() + offsetDays);
+  return d.toLocaleDateString('en-CA');
+}
+
+function setReportPreset(preset) {
+  document.querySelectorAll('#reportPresets .type-pill').forEach(b =>
+    b.classList.toggle('active', b.dataset.preset === preset));
+
+  const from = document.getElementById('repFrom');
+  const to = document.getElementById('repTo');
+
+  if (preset === 'today') { from.value = shopToday(); to.value = shopToday(); }
+  if (preset === 'yesterday') { from.value = shopToday(-1); to.value = shopToday(-1); }
+  if (preset === 'week') { from.value = shopToday(-6); to.value = shopToday(); }
+  if (preset === 'month') {
+    const d = new Date();
+    from.value = new Date(d.getFullYear(), d.getMonth(), 1).toLocaleDateString('en-CA');
+    to.value = shopToday();
+  }
+  loadReports();
+}
+
+async function loadReports() {
+  const box = document.getElementById('reportBody');
+  const from = document.getElementById('repFrom').value || shopToday();
+  const to = document.getElementById('repTo').value || shopToday();
+
+  box.innerHTML = `<div style="text-align:center; color:var(--text-secondary); padding:3rem;">Loading...</div>`;
+  try {
+    const res = await adminFetch(`/api/admin/reports?from=${from}&to=${to}`);
+    const data = await readJsonOrExplain(res);
+    if (!res.ok) throw new Error(data.error || 'Could not load the report');
+    renderReports(data);
+  } catch (err) {
+    box.innerHTML = `<div style="text-align:center; color:var(--danger); padding:3rem;">${esc(err.message)}</div>`;
+  }
+}
+
+function renderReports(r) {
+  const money = v => 'RM ' + v.toFixed(2);
+  const s = r.summary;
+
+  const card = (label, value, accent) => `
+    <div class="report-card ${accent || ''}">
+      <span class="report-card-label">${esc(label)}</span>
+      <span class="report-card-value">${value}</span>
+    </div>`;
+
+  const table = (title, rows, cols) => {
+    if (!rows.length) return `<div class="report-block"><h4>${esc(title)}</h4><p class="report-empty">Nothing yet.</p></div>`;
+    return `
+      <div class="report-block">
+        <h4>${esc(title)}</h4>
+        <div class="history-table-wrap">
+          <table class="history-table">
+            <thead><tr>${cols.map(c => `<th>${esc(c.head)}</th>`).join('')}</tr></thead>
+            <tbody>${rows.map(row => `<tr>${cols.map(c => `<td>${c.cell(row)}</td>`).join('')}</tr>`).join('')}</tbody>
+          </table>
+        </div>
+      </div>`;
+  };
+
+  // Hourly as proportional bars: the shape of the day matters more than exact
+  // figures, and a bar chart reads faster than 24 numbers.
+  const peak = Math.max(...r.hourly.map(h => h.amount), 0);
+  const hourlyChart = r.hourly.length ? `
+    <div class="report-block">
+      <h4>Hourly sales</h4>
+      <div class="hour-chart">
+        ${r.hourly.map(h => `
+          <div class="hour-col" title="${h.bills} bill(s) · ${money(h.amount)}">
+            <div class="hour-bar" style="height:${peak ? Math.max(4, (h.amount / peak) * 100) : 4}%"></div>
+            <span class="hour-label">${String(h.hour).padStart(2, '0')}</span>
+          </div>`).join('')}
+      </div>
+    </div>` : '';
+
+  document.getElementById('reportBody').innerHTML = `
+    <div class="report-cards">
+      ${card('Bills', s.billCount)}
+      ${card('Gross sales', money(s.grossSales))}
+      ${card('Discounts', '- ' + money(s.discounts), 'warn')}
+      ${card('Net sales (paid)', money(s.netSales), 'accent')}
+      ${card('Average bill', money(s.averageBill))}
+      ${card('Outstanding', money(s.outstanding), s.outstanding > 0 ? 'warn' : '')}
+      ${card(`Voided (${s.voidCount})`, money(s.voidValue), s.voidCount ? 'danger' : '')}
+    </div>
+
+    ${table('Payment summary', r.payments, [
+      { head: 'Method', cell: p => esc(PAYMENT_LABELS[p.method] || p.method) },
+      { head: 'Bills', cell: p => p.bills },
+      { head: 'Amount', cell: p => money(p.amount) }
+    ])}
+
+    ${table('By company', r.companies, [
+      { head: 'Company', cell: c => esc(c.company === 'OTEA' ? 'OTea' : 'GreyOne') },
+      { head: 'Bills', cell: c => c.bills },
+      { head: 'Amount', cell: c => money(c.amount) }
+    ])}
+
+    ${table('By order type', r.orderTypes, [
+      { head: 'Type', cell: t => esc(ORDER_TYPE_LABELS[t.type] || t.type) },
+      { head: 'Bills', cell: t => t.bills },
+      { head: 'Amount', cell: t => money(t.amount) }
+    ])}
+
+    ${hourlyChart}
+
+    ${table('Daily sales', r.daily, [
+      { head: 'Date', cell: d => esc(d.day) },
+      { head: 'Bills', cell: d => d.bills },
+      { head: 'Discounts', cell: d => money(d.discounts) },
+      { head: 'Amount', cell: d => money(d.amount) }
+    ])}
+
+    ${table('Top drinks', r.topDrinks, [
+      { head: 'Drink', cell: d => esc(d.name) },
+      { head: 'Sold', cell: d => d.sold },
+      { head: 'Amount', cell: d => money(d.amount) }
+    ])}
+
+    ${table('Add-on sales', r.addOns, [
+      { head: 'Group', cell: a => esc(a.groupName) },
+      { head: 'Option', cell: a => esc(a.optionName) },
+      { head: 'Times', cell: a => a.times },
+      { head: 'Amount', cell: a => money(a.amount) }
+    ])}
+
+    <p class="report-foot">
+      ${esc(r.range.from)} to ${esc(r.range.to)} · grouped in ${esc(r.range.timezone)}
+    </p>`;
+}
+
+async function downloadReportCsv() {
+  const from = document.getElementById('repFrom').value || shopToday();
+  const to = document.getElementById('repTo').value || shopToday();
+  try {
+    const res = await adminFetch(`/api/admin/reports.csv?from=${from}&to=${to}`);
+    if (!res.ok) throw new Error('Export failed');
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `otea-sales-${from}-to-${to}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    alert(`Could not export: ${err.message}`);
+  }
 }

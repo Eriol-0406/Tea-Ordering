@@ -34,6 +34,11 @@ async function readJsonOrExplain(res) {
   }
 }
 
+// Icons come from the sprite in icons.js; this keeps template literals tidy.
+function iconMarkup(name, className) {
+  return `<svg class="icon ${className || ''}" aria-hidden="true"><use href="#i-${name}"></use></svg>`;
+}
+
 function esc(value) {
   if (value === null || value === undefined) return '';
   return String(value)
@@ -135,7 +140,7 @@ async function fetchMenu() {
     console.error("Failed to load menu: ", err);
     document.getElementById('menuGrid').innerHTML = `
       <div style="grid-column: 1/-1; text-align: center; color: var(--danger); padding: 3rem;">
-        ⚠️ Failed to load menu database. Check server connection.
+        <svg class="icon " aria-hidden="true"><use href="#i-alert"></use></svg> Failed to load menu database. Check server connection.
       </div>
     `;
   }
@@ -161,12 +166,11 @@ function renderMenu(items) {
     const priceText = item.variants.length > 1 ? `RM ${startingPrice}+` : `RM ${startingPrice}`;
     
     // Choose appropriate fallback emoji icon
-    let icon = "🥤";
-    if (item.category === "Coffee") icon = "☕";
-    else if (item.category === "Pure Tea") icon = "🍵";
-    else if (item.category === "Fruit Tea") icon = "🍊";
-    else if (item.category === "Cold Brew") icon = "🧊";
-    else if (item.category === "Smoothie") icon = "🍧";
+    const CATEGORY_ICONS = {
+      'Coffee': 'coffee', 'Pure Tea': 'leaf', 'Fruit Tea': 'cup',
+      'Cold Brew': 'snow', 'Smoothie': 'snow', 'Matcha': 'leaf'
+    };
+    const icon = iconMarkup(CATEGORY_ICONS[item.category] || 'cup', 'icon-xl');
 
     const soldOut = item.available === false;
 
@@ -291,7 +295,29 @@ function resolveCartLine(cartItem) {
 // -------------------------------------------------------------
 let selectedOptions = new Map();
 
-function openModifiersModal(itemId) {
+// Which cart line is being edited, if any. Saving replaces that line in place
+// instead of appending a new one.
+let editingCartUid = null;
+
+function editCartItem(uid) {
+  const line = cart.find(c => c.uid === uid);
+  if (!line) return;
+
+  const item = menuData.find(m => m.id === line.id);
+  if (!item) {
+    alert('That drink is no longer on the menu.');
+    return;
+  }
+  if (item.available === false) {
+    alert(`${item.name} is sold out right now.`);
+    return;
+  }
+
+  editingCartUid = uid;
+  openModifiersModal(line.id, line);
+}
+
+function openModifiersModal(itemId, existingLine) {
   const item = menuData.find(m => m.id === itemId);
   if (!item) return;
   if (item.available === false) {
@@ -300,23 +326,29 @@ function openModifiersModal(itemId) {
   }
 
   activeItemForCustomization = item;
-  selectedVariantIndex = 0;
   selectedOptions = new Map();
+
+  const variantIdx = existingLine
+    ? Math.max(0, item.variants.findIndex(v => v.id === existingLine.variantId))
+    : 0;
+  selectedVariantIndex = variantIdx;
 
   document.getElementById('modDrinkTitle').innerText = item.name;
   document.getElementById('modDrinkDesc').innerText = item.description || '';
 
-  renderVariantChoices(item);
-  renderModifierGroups(item);
+  document.getElementById('addToCartConfirmBtn').dataset.mode = existingLine ? 'update' : 'add';
+
+  renderVariantChoices(item, variantIdx);
+  renderModifierGroups(item, existingLine ? existingLine.optionIds : null);
   updateModifiersPriceTally();
 
   document.getElementById('modifiersModalOverlay').classList.add('open');
   document.body.style.overflow = 'hidden';
 }
 
-function renderVariantChoices(item) {
+function renderVariantChoices(item, activeIdx) {
   document.getElementById('modSizeContainer').innerHTML = item.variants.map((v, idx) => `
-    <div class="modifier-pill ${idx === 0 ? 'active' : ''}"
+    <div class="modifier-pill ${idx === (activeIdx || 0) ? 'active' : ''}"
          data-variant-idx="${idx}"
          onclick="selectVariant(${idx})">
       ${esc(v.name)}<br><span style="font-size:0.7rem; font-weight:700; color:var(--accent-color);">RM ${v.price.toFixed(2)}</span>
@@ -324,14 +356,18 @@ function renderVariantChoices(item) {
   `).join('');
 }
 
-function renderModifierGroups(item) {
+function renderModifierGroups(item, preselectedIds) {
   const container = document.getElementById('modGroupsContainer');
   const groups = item.modifierGroups || [];
+  const preset = preselectedIds ? new Set(preselectedIds) : null;
 
-  // Pre-select each group's default so required choices are never empty.
   groups.forEach(group => {
     const chosen = new Set();
-    if (group.selection === 'single') {
+    if (preset) {
+      // Editing: restore exactly what this line already had.
+      group.options.forEach(o => { if (preset.has(o.id)) chosen.add(o.id); });
+    } else if (group.selection === 'single') {
+      // New line: pre-select the default so required choices are never empty.
       const def = group.options.find(o => o.isDefault) || (group.required ? group.options[0] : null);
       if (def) chosen.add(def.id);
     }
@@ -346,7 +382,8 @@ function renderModifierGroups(item) {
         <div class="modifier-section">
           <span class="modifier-label">${label}</span>
           ${group.options.map(o => `
-            <div class="addon-row" id="opt-${o.id}" onclick="toggleOption(${group.id}, ${o.id})">
+            <div class="addon-row ${(selectedOptions.get(group.id) || new Set()).has(o.id) ? 'active' : ''}"
+                 id="opt-${o.id}" onclick="toggleOption(${group.id}, ${o.id})">
               <span style="font-size:0.85rem; font-weight:500;">${esc(o.name)}${o.nameZh ? ' ' + esc(o.nameZh) : ''}</span>
               <span style="font-size:0.85rem; font-weight:700; color:var(--accent-color);">+ RM ${o.priceDelta.toFixed(2)}</span>
             </div>
@@ -427,14 +464,16 @@ function updateModifiersPriceTally() {
   if (!activeItemForCustomization) return;
   const base = activeItemForCustomization.variants[selectedVariantIndex].price;
   const extra = chosenOptionObjects().reduce((sum, c) => sum + c.option.priceDelta, 0);
-  document.getElementById('addToCartConfirmBtn').innerText =
-    `Add to Cart (RM ${(base + extra).toFixed(2)})`;
+  const button = document.getElementById('addToCartConfirmBtn');
+  const verb = button.dataset.mode === 'update' ? 'Update' : 'Add to Cart';
+  button.innerText = `${verb} (RM ${(base + extra).toFixed(2)})`;
 }
 
 function closeModifiersModal() {
   document.getElementById('modifiersModalOverlay').classList.remove('open');
   document.body.style.overflow = '';
   activeItemForCustomization = null;
+  editingCartUid = null;
   selectedOptions = new Map();
 }
 
@@ -447,6 +486,29 @@ function confirmAddToCart() {
 
   // Two lines merge only when the drink, size and every option match.
   const uid = `${item.id}-${variant.id}-${optionIds.join('.')}`;
+
+  if (editingCartUid) {
+    const line = cart.find(c => c.uid === editingCartUid);
+    const quantity = line ? line.quantity : 1;
+    cart = cart.filter(c => c.uid !== editingCartUid);
+
+    // The edit may now match another line; fold them together rather than
+    // leaving two identical rows.
+    const twin = cart.find(c => c.uid === uid);
+    if (twin) {
+      twin.quantity += quantity;
+    } else {
+      cart.push({ uid, id: item.id, variantId: variant.id, variantName: variant.name, optionIds, quantity });
+    }
+
+    editingCartUid = null;
+    saveCartToStorage();
+    updateCartBadge();
+    renderCartDrawer();
+    closeModifiersModal();
+    return;
+  }
+
   const existing = cart.find(c => c.uid === uid);
 
   if (existing) {
@@ -533,7 +595,7 @@ function renderCartDrawer() {
   if (!cart.length) {
     itemsContainer.innerHTML = `
       <div class="cart-empty">
-        <div class="cart-empty-icon">🍵</div>
+        <div class="cart-empty-icon">${iconMarkup('cup', 'icon-xl')}</div>
         <p>No drinks in selection</p>
       </div>
     `;
@@ -569,10 +631,11 @@ function renderCartDrawer() {
           <div class="cart-item-options">${esc(optionsText)}</div>
           <div class="cart-item-price">RM ${itemTotal.toFixed(2)} <span style="font-size:0.7rem; color:var(--text-muted); font-weight:400;">(RM ${unitPrice.toFixed(2)} ea)</span></div>
           <div class="cart-item-controls">
-            <button class="qty-btn" onclick="updateCartQty('${cartItem.uid}', -1)">-</button>
+            <button class="qty-btn" onclick="updateCartQty('${cartItem.uid}', -1)" aria-label="One fewer">${iconMarkup('minus')}</button>
             <span class="qty-val">${cartItem.quantity}</span>
-            <button class="qty-btn" onclick="updateCartQty('${cartItem.uid}', 1)">+</button>
-            <button class="cart-item-remove" onclick="removeCartItem('${cartItem.uid}')">Remove</button>
+            <button class="qty-btn" onclick="updateCartQty('${cartItem.uid}', 1)" aria-label="One more">${iconMarkup('plus')}</button>
+            <button class="icon-btn subtle" onclick="editCartItem('${cartItem.uid}')" aria-label="Edit this drink" title="Edit">${iconMarkup('edit')}</button>
+            <button class="icon-btn" onclick="removeCartItem('${cartItem.uid}')" aria-label="Remove this drink" title="Remove">${iconMarkup('trash')}</button>
           </div>
         </div>
       </div>
@@ -651,7 +714,7 @@ function runLocationCheck() {
   const nextBtn = document.getElementById('locationNextBtn');
 
   icon.className = 'location-icon-status scanning';
-  icon.innerText = '📍';
+  icon.innerHTML = iconMarkup('pin', 'icon-xl');
   title.innerText = 'Locating device...';
   text.innerText = 'Acquiring GPS location tokens for security check.';
   coordsDiv.style.display = 'none';
@@ -754,7 +817,7 @@ function handleLocationSuccess(lat, lng) {
 
   if (match) {
     icon.className = 'location-icon-status success';
-    icon.innerText = '✅';
+    icon.innerHTML = iconMarkup('check', 'icon-xl');
     title.innerText = `Verified at ${match.zone.name}`;
     text.innerText = match.zone.allowCounter
       ? `You are inside ${match.zone.name}. Pay at Counter is unlocked.`
@@ -762,13 +825,13 @@ function handleLocationSuccess(lat, lng) {
     enablePaymentCounter(!!match.zone.allowCounter);
   } else if (onlineCanBypassProximity() && d <= (appConfig.maxServiceRadiusKm || 25)) {
     icon.className = 'location-icon-status success';
-    icon.innerText = '⚠️';
+    icon.innerHTML = iconMarkup('alert', 'icon-xl');
     title.innerText = 'Outside Pickup Zones';
     text.innerText = `You are ${d} km from the shop. Pay at Counter is unavailable here - please prepay online.`;
     enablePaymentCounter(false);
   } else {
     icon.className = 'location-icon-status denied';
-    icon.innerText = '❌';
+    icon.innerHTML = iconMarkup('close', 'icon-xl');
     title.innerText = 'Outside Ordering Zones';
     text.innerText = `You are ${d} km from the shop. Ordering is available at ${zoneNames()}.`;
     nextBtn.disabled = true;
@@ -805,7 +868,7 @@ function handleLocationDenied() {
 
   coordsDiv.style.display = 'none';
   icon.className = 'location-icon-status denied';
-  icon.innerText = '🔒';
+  icon.innerHTML = iconMarkup('lock', 'icon-xl');
   enablePaymentCounter(false);
   setRetryVisible(true);
 
@@ -1186,7 +1249,7 @@ function initTrackingMap() {
 
   L.marker([restaurantLocation.lat, restaurantLocation.lng], {
     icon: L.divIcon({
-      html: `<div style="font-size: 2rem; filter: drop-shadow(0 0 5px var(--accent-color));">✨</div>`,
+      html: `<div style="color: var(--accent-color); filter: drop-shadow(0 0 5px var(--accent-color));">${iconMarkup('pin', 'icon-xl')}</div>`,
       className: 'custom-div-icon',
       iconSize: [30, 30],
       iconAnchor: [15, 15]
@@ -1198,7 +1261,7 @@ function initTrackingMap() {
 
   if (activeOrder.latitude && activeOrder.longitude) {
     const customerIcon = L.divIcon({
-      html: `<div style="font-size: 1.5rem; filter: drop-shadow(0 0 6px var(--success)); animation: pulseScan 2s infinite;">📍</div>`,
+      html: `<div style="color: var(--success); filter: drop-shadow(0 0 6px var(--success)); animation: pulseScan 2s infinite;">${iconMarkup('pin', 'icon-lg')}</div>`,
       className: 'custom-div-icon',
       iconSize: [25, 25],
       iconAnchor: [12, 12]

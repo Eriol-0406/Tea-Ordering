@@ -829,6 +829,113 @@ module.exports = {
   // -----------------------------------------------------------
   // Reporting
   // -----------------------------------------------------------
+  // -----------------------------------------------------------
+  // Sales reporting
+  //
+  // Every figure is grouped in the shop's own timezone. The server runs in UTC,
+  // so without this an afternoon rush would be reported in the small hours.
+  // Voided orders are excluded from takings but counted separately - never
+  // silently dropped.
+  // -----------------------------------------------------------
+  async salesReport({ from, to } = {}) {
+    const tz = process.env.REPORT_TZ || 'Asia/Kuala_Lumpur';
+
+    // Bounds are half-open [from 00:00, to+1day 00:00) in local time.
+    const where = `WHERE created_at >= ($1::date AT TIME ZONE $3)
+                     AND created_at <  (($2::date + 1) AT TIME ZONE $3)`;
+    const params = [from, to, tz];
+
+    const [summary, payments, companies, hourly, daily, drinks, addons, types] = await Promise.all([
+      query(`
+        SELECT
+          COUNT(*) FILTER (WHERE voided_at IS NULL)::int                        AS bill_count,
+          COALESCE(SUM(gross_total) FILTER (WHERE voided_at IS NULL), 0)        AS gross_sales,
+          COALESCE(SUM(discount_amount) FILTER (WHERE voided_at IS NULL), 0)    AS discounts,
+          COALESCE(SUM(total) FILTER (WHERE voided_at IS NULL
+                                        AND payment_status = 'paid'), 0)        AS net_sales,
+          COALESCE(SUM(total) FILTER (WHERE voided_at IS NULL
+                                        AND payment_status = 'pending'), 0)     AS outstanding,
+          COUNT(*) FILTER (WHERE voided_at IS NOT NULL)::int                    AS void_count,
+          COALESCE(SUM(total) FILTER (WHERE voided_at IS NOT NULL), 0)          AS void_value
+        FROM orders ${where}`, params),
+
+      query(`
+        SELECT payment_method AS method, COUNT(*)::int AS bills, COALESCE(SUM(total), 0) AS amount
+          FROM orders ${where} AND voided_at IS NULL AND payment_status = 'paid'
+         GROUP BY payment_method ORDER BY amount DESC`, params),
+
+      query(`
+        SELECT oi.company, COUNT(DISTINCT o.id)::int AS bills,
+               COALESCE(SUM(oi.price * oi.quantity), 0) AS amount
+          FROM order_items oi JOIN orders o ON o.id = oi.order_id
+         ${where.replace(/created_at/g, 'o.created_at')}
+           AND o.voided_at IS NULL AND oi.company IS NOT NULL
+         GROUP BY oi.company ORDER BY amount DESC`, params),
+
+      query(`
+        SELECT EXTRACT(HOUR FROM created_at AT TIME ZONE $3)::int AS hour,
+               COUNT(*)::int AS bills, COALESCE(SUM(total), 0) AS amount
+          FROM orders ${where} AND voided_at IS NULL
+         GROUP BY hour ORDER BY hour`, params),
+
+      query(`
+        SELECT to_char(created_at AT TIME ZONE $3, 'YYYY-MM-DD') AS day,
+               COUNT(*)::int AS bills, COALESCE(SUM(total), 0) AS amount,
+               COALESCE(SUM(discount_amount), 0) AS discounts
+          FROM orders ${where} AND voided_at IS NULL
+         GROUP BY day ORDER BY day`, params),
+
+      query(`
+        SELECT oi.name, SUM(oi.quantity)::int AS sold,
+               COALESCE(SUM(oi.price * oi.quantity), 0) AS amount
+          FROM order_items oi JOIN orders o ON o.id = oi.order_id
+         ${where.replace(/created_at/g, 'o.created_at')} AND o.voided_at IS NULL
+         GROUP BY oi.name ORDER BY sold DESC LIMIT 15`, params),
+
+      query(`
+        SELECT m.group_name, m.option_name, COUNT(*)::int AS times,
+               COALESCE(SUM(m.price_delta), 0) AS amount
+          FROM order_item_modifiers m
+          JOIN order_items oi ON oi.id = m.order_item_id
+          JOIN orders o ON o.id = oi.order_id
+         ${where.replace(/created_at/g, 'o.created_at')} AND o.voided_at IS NULL
+           AND m.price_delta > 0
+         GROUP BY m.group_name, m.option_name ORDER BY amount DESC`, params),
+
+      query(`
+        SELECT order_type, COUNT(*)::int AS bills, COALESCE(SUM(total), 0) AS amount
+          FROM orders ${where} AND voided_at IS NULL
+         GROUP BY order_type ORDER BY amount DESC`, params)
+    ]);
+
+    const n = v => Math.round(Number(v || 0) * 100) / 100;
+    const sum = summary.rows[0];
+
+    return {
+      range: { from, to, timezone: tz },
+      summary: {
+        billCount: sum.bill_count,
+        grossSales: n(sum.gross_sales),
+        discounts: n(sum.discounts),
+        netSales: n(sum.net_sales),
+        outstanding: n(sum.outstanding),
+        voidCount: sum.void_count,
+        voidValue: n(sum.void_value),
+        averageBill: sum.bill_count ? n(Number(sum.net_sales) / sum.bill_count) : 0
+      },
+      payments: payments.rows.map(r => ({ method: r.method, bills: r.bills, amount: n(r.amount) })),
+      companies: companies.rows.map(r => ({ company: r.company, bills: r.bills, amount: n(r.amount) })),
+      orderTypes: types.rows.map(r => ({ type: r.order_type, bills: r.bills, amount: n(r.amount) })),
+      hourly: hourly.rows.map(r => ({ hour: r.hour, bills: r.bills, amount: n(r.amount) })),
+      daily: daily.rows.map(r => ({ day: r.day, bills: r.bills, amount: n(r.amount), discounts: n(r.discounts) })),
+      topDrinks: drinks.rows.map(r => ({ name: r.name, sold: r.sold, amount: n(r.amount) })),
+      addOns: addons.rows.map(r => ({
+        groupName: r.group_name, optionName: r.option_name,
+        times: r.times, amount: n(r.amount)
+      }))
+    };
+  },
+
   async salesByDay(days = 30) {
     const { rows } = await query(
       `SELECT to_char(created_at, 'YYYY-MM-DD') AS day,

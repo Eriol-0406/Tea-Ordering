@@ -16,7 +16,7 @@
   <!-- Sign-in gate: the workspace stays hidden until a token is issued -->
   <div id="adminLoginGate" class="admin-login-gate" style="display:none;">
     <div class="glass-panel admin-login-card">
-      <h1 style="font-size:1.3rem; margin-bottom:0.25rem;">⚙️ OTea x GreyOne</h1>
+      <h1 style="font-size:1.3rem; margin-bottom:0.25rem;"><svg class="icon icon-lg" aria-hidden="true"><use href="#i-settings"></use></svg> OTea x GreyOne</h1>
       <p style="font-size:0.85rem; color:var(--text-secondary); margin-bottom:1.25rem;">
         Staff sign-in required to view the order console.
       </p>
@@ -37,27 +37,30 @@
   <!-- Admin Sidebar Navigation -->
   <aside class="admin-sidebar">
     <div class="admin-logo">
-      <h1><span>⚙️</span> OTea x GreyOne</h1>
+      <h1><span><svg class="icon " aria-hidden="true"><use href="#i-settings"></use></svg></span> OTea x GreyOne</h1>
     </div>
     
     <nav class="admin-nav">
       <a href="#" class="admin-nav-item active" data-view="dashboard" onclick="showView('dashboard'); return false;">
-        <span>📊</span> Dashboard
+        <svg class="icon " aria-hidden="true"><use href="#i-chart"></use></svg> Dashboard
       </a>
       <a href="#" class="admin-nav-item" data-view="till" onclick="showView('till'); return false;">
-        <span>🧾</span> Till
+        <svg class="icon " aria-hidden="true"><use href="#i-receipt"></use></svg> Till
       </a>
       <a href="#" class="admin-nav-item" data-view="drawer" onclick="showView('drawer'); return false;">
-        <span>💵</span> Drawer
+        <svg class="icon " aria-hidden="true"><use href="#i-cash"></use></svg> Drawer
       </a>
       <a href="#" class="admin-nav-item" data-view="menu" onclick="showView('menu'); return false;">
-        <span>🍵</span> Menu
+        <svg class="icon " aria-hidden="true"><use href="#i-cup"></use></svg> Menu
       </a>
       <a href="#" class="admin-nav-item" data-view="modifiers" onclick="showView('modifiers'); return false;">
-        <span>🧋</span> Modifiers
+        <svg class="icon " aria-hidden="true"><use href="#i-leaf"></use></svg> Modifiers
+      </a>
+      <a href="#" class="admin-nav-item" data-view="reports" onclick="showView('reports'); return false;">
+        <svg class="icon " aria-hidden="true"><use href="#i-chart"></use></svg> Sales Reports
       </a>
       <a href="#" class="admin-nav-item" data-view="history" onclick="showView('history'); return false;">
-        <span>📜</span> Order History
+        <svg class="icon " aria-hidden="true"><use href="#i-list"></use></svg> Order History
       </a>
     </nav>
 
@@ -77,7 +80,7 @@
       <h2 style="font-size: 1.25rem;">Order Control Console</h2>
       <div style="display: flex; gap: 1rem;">
         <button class="btn btn-secondary" onclick="fetchAllOrders()" style="padding: 0.5rem 1rem; font-size: 0.85rem;">
-          <span>🔄</span> Refresh Queue
+          <svg class="icon " aria-hidden="true"><use href="#i-refresh"></use></svg> Refresh Queue
         </button>
       </div>
     </header>
@@ -89,7 +92,7 @@
     <section class="admin-metrics-bar">
       <!-- Total Sales -->
       <div class="metric-card glass-panel accented">
-        <div class="metric-icon-box">💵</div>
+        <div class="metric-icon-box"><svg class="icon icon-lg" aria-hidden="true"><use href="#i-cash"></use></svg></div>
         <div>
           <div class="metric-label">Gross Revenue</div>
           <div class="metric-val" id="metricSales">RM 0.00</div>
@@ -97,7 +100,7 @@
       </div>
       <!-- Active Orders -->
       <div class="metric-card glass-panel accented">
-        <div class="metric-icon-box">🛎️</div>
+        <div class="metric-icon-box"><svg class="icon icon-lg" aria-hidden="true"><use href="#i-bell"></use></svg></div>
         <div>
           <div class="metric-label">Active Orders</div>
           <div class="metric-val" id="metricActive">0</div>
@@ -105,7 +108,7 @@
       </div>
       <!-- Spam Risk Flags -->
       <div class="metric-card glass-panel danger" id="spamMetricCard">
-        <div class="metric-icon-box" id="spamMetricIcon">🛡️</div>
+        <div class="metric-icon-box" id="spamMetricIcon"><svg class="icon icon-lg" aria-hidden="true"><use href="#i-shield"></use></svg></div>
         <div>
           <div class="metric-label">High Risk Alerts</div>
           <div class="metric-val" id="metricSpam">0</div>
@@ -113,7 +116,7 @@
       </div>
       <!-- Average Distance -->
       <div class="metric-card glass-panel safe">
-        <div class="metric-icon-box">📍</div>
+        <div class="metric-icon-box"><svg class="icon icon-lg" aria-hidden="true"><use href="#i-pin"></use></svg></div>
         <div>
           <div class="metric-label">Avg Proximity</div>
           <div class="metric-val" id="metricDistance">0.0 km</div>
@@ -195,7 +198,7 @@
       <section class="admin-orders-list-panel" style="max-width:760px;">
         <div class="panel-title-row">
           <h3 style="font-size:1.1rem;">Cash Drawer</h3>
-          <button class="btn btn-secondary" onclick="loadDrawer()" style="padding:0.5rem 1rem; font-size:0.85rem;">🔄 Refresh</button>
+          <button class="btn btn-secondary" onclick="loadDrawer()" style="padding:0.5rem 1rem; font-size:0.85rem;"><svg class="icon " aria-hidden="true"><use href="#i-refresh"></use></svg> Refresh</button>
         </div>
         <div id="drawerBody">
           <div style="text-align:center; color:var(--text-secondary); padding:3rem;">Loading...</div>
@@ -209,8 +212,8 @@
         <div class="panel-title-row">
           <h3 style="font-size: 1.1rem;">Menu</h3>
           <div style="display:flex; gap:0.5rem;">
-            <button class="btn btn-secondary" onclick="loadMenuAdmin()" style="padding:0.5rem 1rem; font-size:0.85rem;">🔄 Refresh</button>
-            <button class="btn btn-primary" onclick="openItemEditor()" style="padding:0.5rem 1rem; font-size:0.85rem;">+ New Drink</button>
+            <button class="btn btn-secondary" onclick="loadMenuAdmin()" style="padding:0.5rem 1rem; font-size:0.85rem;"><svg class="icon " aria-hidden="true"><use href="#i-refresh"></use></svg> Refresh</button>
+            <button class="btn btn-primary" onclick="openItemEditor()" style="padding:0.5rem 1rem; font-size:0.85rem;"><svg class="icon " aria-hidden="true"><use href="#i-plus"></use></svg> New Drink</button>
           </div>
         </div>
         <p style="font-size:0.8rem; color:var(--text-secondary); margin-bottom:0.75rem;">
@@ -229,8 +232,8 @@
         <div class="panel-title-row">
           <h3 style="font-size: 1.1rem;">Modifiers</h3>
           <div style="display:flex; gap:0.5rem;">
-            <button class="btn btn-secondary" onclick="loadMenuAdmin()" style="padding:0.5rem 1rem; font-size:0.85rem;">🔄 Refresh</button>
-            <button class="btn btn-primary" onclick="openGroupEditor()" style="padding:0.5rem 1rem; font-size:0.85rem;">+ New Group</button>
+            <button class="btn btn-secondary" onclick="loadMenuAdmin()" style="padding:0.5rem 1rem; font-size:0.85rem;"><svg class="icon " aria-hidden="true"><use href="#i-refresh"></use></svg> Refresh</button>
+            <button class="btn btn-primary" onclick="openGroupEditor()" style="padding:0.5rem 1rem; font-size:0.85rem;"><svg class="icon " aria-hidden="true"><use href="#i-plus"></use></svg> New Group</button>
           </div>
         </div>
         <p style="font-size:0.8rem; color:var(--text-secondary); margin-bottom:0.75rem;">
@@ -243,12 +246,41 @@
       </section>
     </div>
 
+    <!-- ========== SALES REPORTS VIEW ========== -->
+    <div class="admin-view" id="view-reports" style="display:none;">
+      <section class="admin-orders-list-panel">
+        <div class="panel-title-row">
+          <h3 style="font-size:1.1rem;">Sales Reports</h3>
+          <button class="btn btn-secondary" onclick="downloadReportCsv()" style="padding:0.5rem 1rem; font-size:0.85rem;">
+            <svg class="icon " aria-hidden="true"><use href="#i-download"></use></svg> Export CSV
+          </button>
+        </div>
+
+        <div class="report-presets" id="reportPresets">
+          <button class="type-pill active" data-preset="today" onclick="setReportPreset('today')">Today</button>
+          <button class="type-pill" data-preset="yesterday" onclick="setReportPreset('yesterday')">Yesterday</button>
+          <button class="type-pill" data-preset="week" onclick="setReportPreset('week')">Last 7 days</button>
+          <button class="type-pill" data-preset="month" onclick="setReportPreset('month')">This month</button>
+        </div>
+
+        <div class="history-filters">
+          <label>From<input type="date" id="repFrom" class="input-field"></label>
+          <label>To<input type="date" id="repTo" class="input-field"></label>
+          <button class="btn btn-primary" onclick="loadReports()" style="padding:0.5rem 1.1rem; font-size:0.85rem;">Show</button>
+        </div>
+
+        <div id="reportBody">
+          <div style="text-align:center; color:var(--text-secondary); padding:3rem;">Loading...</div>
+        </div>
+      </section>
+    </div>
+
     <!-- ========== ORDER HISTORY VIEW ========== -->
     <div class="admin-view" id="view-history" style="display:none;">
       <section class="admin-orders-list-panel">
         <div class="panel-title-row">
           <h3 style="font-size: 1.1rem;">Order History</h3>
-          <button class="btn btn-secondary" onclick="downloadHistoryCsv()" style="padding:0.5rem 1rem; font-size:0.85rem;">⬇️ Export CSV</button>
+          <button class="btn btn-secondary" onclick="downloadHistoryCsv()" style="padding:0.5rem 1rem; font-size:0.85rem;"><svg class="icon " aria-hidden="true"><use href="#i-download"></use></svg> Export CSV</button>
         </div>
 
         <div class="history-filters">
@@ -295,7 +327,7 @@
     <div class="admin-dialog glass-panel">
       <div class="admin-dialog-head">
         <h3 id="adminDialogTitle">Edit</h3>
-        <button class="sheet-close" onclick="closeAdminDialog()">✕</button>
+        <button class="sheet-close" onclick="closeAdminDialog()"><svg class="icon " aria-hidden="true"><use href="#i-close"></use></svg></button>
       </div>
       <div id="adminDialogBody"></div>
       <div class="admin-dialog-actions">
@@ -309,6 +341,7 @@
   <!-- Socket.io Script and Leaflet.js Scripts -->
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
   <!-- Main Logic -->
+  <script src="/js/icons.js"></script>
   <script src="/js/admin.js"></script>
 </body>
 </html>

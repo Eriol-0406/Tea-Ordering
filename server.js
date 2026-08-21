@@ -573,11 +573,77 @@ app.get('/api/admin/orders', requireAdmin, async (req, res, next) => {
 // 4b. Admin sales reporting, straight out of the order tables
 app.get('/api/admin/reports', requireAdmin, async (req, res, next) => {
   try {
-    const [salesByDay, topDrinks] = await Promise.all([
-      store.salesByDay(30),
-      store.topDrinks(20)
-    ]);
-    res.json({ salesByDay, topDrinks });
+    const isDate = v => /^\d{4}-\d{2}-\d{2}$/.test(v);
+    const today = new Date().toLocaleDateString('en-CA', {
+      timeZone: process.env.REPORT_TZ || 'Asia/Kuala_Lumpur'
+    });
+    const from = isDate(req.query.from) ? req.query.from : today;
+    const to = isDate(req.query.to) ? req.query.to : today;
+    if (from > to) return res.status(400).json({ error: 'The start date is after the end date' });
+
+    res.json(await store.salesReport({ from, to }));
+  } catch (err) { next(err); }
+});
+
+// The same figures as a spreadsheet, for accounting.
+app.get('/api/admin/reports.csv', requireAdmin, async (req, res, next) => {
+  try {
+    const isDate = v => /^\d{4}-\d{2}-\d{2}$/.test(v);
+    const today = new Date().toLocaleDateString('en-CA', {
+      timeZone: process.env.REPORT_TZ || 'Asia/Kuala_Lumpur'
+    });
+    const from = isDate(req.query.from) ? req.query.from : today;
+    const to = isDate(req.query.to) ? req.query.to : today;
+
+    const r = await store.salesReport({ from, to });
+    const rows = [];
+    const push = (...cells) => rows.push(cells);
+
+    push('OTea x GreyOne sales report');
+    push('From', from, 'To', to, 'Timezone', r.range.timezone);
+    push();
+    push('SUMMARY');
+    push('Bill count', r.summary.billCount);
+    push('Gross sales (RM)', r.summary.grossSales.toFixed(2));
+    push('Discounts (RM)', r.summary.discounts.toFixed(2));
+    push('Net sales, paid (RM)', r.summary.netSales.toFixed(2));
+    push('Outstanding, unpaid (RM)', r.summary.outstanding.toFixed(2));
+    push('Voided bills', r.summary.voidCount);
+    push('Voided value (RM)', r.summary.voidValue.toFixed(2));
+    push('Average bill (RM)', r.summary.averageBill.toFixed(2));
+    push();
+    push('PAYMENT SUMMARY'); push('Method', 'Bills', 'Amount (RM)');
+    r.payments.forEach(p => push(p.method, p.bills, p.amount.toFixed(2)));
+    push();
+    push('BY COMPANY'); push('Company', 'Bills', 'Amount (RM)');
+    r.companies.forEach(c => push(c.company, c.bills, c.amount.toFixed(2)));
+    push();
+    push('BY ORDER TYPE'); push('Type', 'Bills', 'Amount (RM)');
+    r.orderTypes.forEach(t => push(t.type, t.bills, t.amount.toFixed(2)));
+    push();
+    push('DAILY'); push('Date', 'Bills', 'Amount (RM)', 'Discounts (RM)');
+    r.daily.forEach(d => push(d.day, d.bills, d.amount.toFixed(2), d.discounts.toFixed(2)));
+    push();
+    push('HOURLY'); push('Hour', 'Bills', 'Amount (RM)');
+    r.hourly.forEach(h => push(String(h.hour).padStart(2, '0') + ':00', h.bills, h.amount.toFixed(2)));
+    push();
+    push('TOP DRINKS'); push('Drink', 'Sold', 'Amount (RM)');
+    r.topDrinks.forEach(d => push(d.name, d.sold, d.amount.toFixed(2)));
+    push();
+    push('ADD-ON SALES'); push('Group', 'Option', 'Times', 'Amount (RM)');
+    r.addOns.forEach(a => push(a.groupName, a.optionName, a.times, a.amount.toFixed(2)));
+
+    // A leading =, +, - or @ makes spreadsheets treat a cell as a formula.
+    const escapeCell = (value) => {
+      let text = String(value === null || value === undefined ? '' : value);
+      if (/^[=+\-@]/.test(text)) text = "'" + text;
+      return '"' + text.replace(/"/g, '""') + '"';
+    };
+    const csv = rows.map(r2 => r2.map(escapeCell).join(',')).join('\r\n');
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="sales-${from}-to-${to}.csv"`);
+    res.send('\uFEFF' + csv);
   } catch (err) { next(err); }
 });
 
