@@ -87,8 +87,35 @@ function rowToOrder(row, items) {
     riskReason: row.risk_reason,
     ipAddress: row.ip_address,
     sessionId: row.session_id,
+    source: row.source,
+    orderType: row.order_type,
+    shiftId: row.shift_id ? Number(row.shift_id) : null,
+    staffName: row.staff_name,
+    grossTotal: row.gross_total === null || row.gross_total === undefined ? null : Number(row.gross_total),
+    discountAmount: Number(row.discount_amount || 0),
+    discountReason: row.discount_reason,
+    cashReceived: row.cash_received === null || row.cash_received === undefined ? null : Number(row.cash_received),
+    cashChange: row.cash_change === null || row.cash_change === undefined ? null : Number(row.cash_change),
+    paidAt: row.paid_at instanceof Date ? row.paid_at.toISOString() : row.paid_at,
+    voidedAt: row.voided_at instanceof Date ? row.voided_at.toISOString() : row.voided_at,
+    voidedBy: row.voided_by,
+    voidReason: row.void_reason,
     // The app and the frontend both speak ISO strings.
     createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at
+  };
+}
+
+function shiftRow(r) {
+  const n = v => (v === null || v === undefined ? null : Number(v));
+  const iso = v => (v instanceof Date ? v.toISOString() : v);
+  return {
+    id: Number(r.id),
+    openedAt: iso(r.opened_at), openedBy: r.opened_by,
+    openingFloat: n(r.opening_float),
+    closedAt: iso(r.closed_at), closedBy: r.closed_by,
+    countedCash: n(r.counted_cash), expectedCash: n(r.expected_cash),
+    variance: n(r.variance), notes: r.notes,
+    isOpen: !r.closed_at
   };
 }
 
@@ -162,12 +189,20 @@ module.exports = {
       await client.query(
         `INSERT INTO orders (id, customer_name, phone, notes, total, payment_method,
            payment_status, status, latitude, longitude, distance, zone_name,
-           spam_risk, risk_reason, ip_address, session_id, created_at, updated_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$17)`,
+           spam_risk, risk_reason, ip_address, session_id, created_at, updated_at,
+           source, order_type, shift_id, staff_name, gross_total, discount_amount,
+           discount_reason, cash_received, cash_change, paid_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$17,
+                 $18,$19,$20,$21,$22,$23,$24,$25,$26,$27)`,
         [order.id, order.customerName, order.phone, order.notes || '', order.total,
          order.paymentMethod, order.paymentStatus, order.status, order.latitude,
          order.longitude, order.distance, order.zoneName || null, order.spamRisk,
-         order.riskReason, order.ipAddress, order.sessionId, order.createdAt]
+         order.riskReason, order.ipAddress, order.sessionId, order.createdAt,
+         order.source || 'customer', order.orderType || 'takeaway',
+         order.shiftId || null, order.staffName || null,
+         order.grossTotal ?? order.total, order.discountAmount || 0,
+         order.discountReason || null, order.cashReceived ?? null,
+         order.cashChange ?? null, order.paidAt || null]
       );
 
       for (const item of order.items) {
@@ -219,15 +254,25 @@ module.exports = {
     return rows.map(r => rowToOrder(r, byOrder.get(r.id) || []));
   },
 
-  async updateOrder(id, { status, paymentStatus }) {
+  async updateOrder(id, { status, paymentStatus, paymentMethod, cashReceived, cashChange }) {
     const { rows } = await query(
       `UPDATE orders
           SET status         = COALESCE($2, status),
               payment_status = COALESCE($3, payment_status),
+              payment_method = COALESCE($4, payment_method),
+              cash_received  = COALESCE($5, cash_received),
+              cash_change    = COALESCE($6, cash_change),
+              -- Stamped the first time it becomes paid, and never moved after.
+              paid_at        = CASE WHEN $3 = 'paid' AND paid_at IS NULL
+                                    THEN now() ELSE paid_at END,
               updated_at     = now()
         WHERE id = $1
         RETURNING id`,
-      [id, status === undefined ? null : status, paymentStatus === undefined ? null : paymentStatus]
+      [id, status === undefined ? null : status,
+       paymentStatus === undefined ? null : paymentStatus,
+       paymentMethod === undefined ? null : paymentMethod,
+       cashReceived === undefined ? null : cashReceived,
+       cashChange === undefined ? null : cashChange]
     );
     if (!rows.length) return null;
     return module.exports.getOrder(id);
@@ -585,6 +630,122 @@ module.exports = {
     } finally {
       client.release();
     }
+  },
+
+  // -----------------------------------------------------------
+  // Shifts and the cash drawer
+  // -----------------------------------------------------------
+  async openShift({ openedBy, openingFloat }) {
+    const { rows } = await query(
+      `INSERT INTO shifts (opened_by, opening_float) VALUES ($1,$2) RETURNING id`,
+      [openedBy, openingFloat]
+    );
+    return Number(rows[0].id);
+  },
+
+  async currentShift() {
+    const { rows } = await query(
+      'SELECT * FROM shifts WHERE closed_at IS NULL ORDER BY opened_at DESC LIMIT 1'
+    );
+    return rows.length ? shiftRow(rows[0]) : null;
+  },
+
+  async getShift(id) {
+    const { rows } = await query('SELECT * FROM shifts WHERE id = $1', [id]);
+    return rows.length ? shiftRow(rows[0]) : null;
+  },
+
+  // What should be in the drawer: float, plus cash taken, plus paid-in, less
+  // paid-out. Voided orders are excluded - the money went back to the customer.
+  async shiftTotals(shiftId) {
+    const { rows } = await query(
+      `SELECT
+         (SELECT opening_float FROM shifts WHERE id = $1)                        AS opening_float,
+         COALESCE((SELECT SUM(total) FROM orders
+                    WHERE shift_id = $1 AND payment_method = 'cash'
+                      AND payment_status = 'paid' AND voided_at IS NULL), 0)     AS cash_sales,
+         COALESCE((SELECT SUM(total) FROM orders
+                    WHERE shift_id = $1 AND payment_method <> 'cash'
+                      AND payment_status = 'paid' AND voided_at IS NULL), 0)     AS non_cash_sales,
+         COALESCE((SELECT SUM(amount) FROM cash_movements
+                    WHERE shift_id = $1 AND direction = 'in'), 0)                AS paid_in,
+         COALESCE((SELECT SUM(amount) FROM cash_movements
+                    WHERE shift_id = $1 AND direction = 'out'), 0)               AS paid_out,
+         COALESCE((SELECT COUNT(*) FROM orders
+                    WHERE shift_id = $1 AND voided_at IS NULL), 0)::int          AS bill_count,
+         COALESCE((SELECT SUM(discount_amount) FROM orders
+                    WHERE shift_id = $1 AND voided_at IS NULL), 0)               AS discounts,
+         COALESCE((SELECT SUM(total) FROM orders
+                    WHERE shift_id = $1 AND voided_at IS NOT NULL), 0)           AS voided_value,
+         COALESCE((SELECT COUNT(*) FROM orders
+                    WHERE shift_id = $1 AND voided_at IS NOT NULL), 0)::int      AS voided_count`,
+      [shiftId]
+    );
+    const r = rows[0];
+    const n = v => Number(v || 0);
+    const expectedCash = n(r.opening_float) + n(r.cash_sales) + n(r.paid_in) - n(r.paid_out);
+    return {
+      openingFloat: n(r.opening_float),
+      cashSales: n(r.cash_sales),
+      nonCashSales: n(r.non_cash_sales),
+      paidIn: n(r.paid_in),
+      paidOut: n(r.paid_out),
+      billCount: r.bill_count,
+      discounts: n(r.discounts),
+      voidedValue: n(r.voided_value),
+      voidedCount: r.voided_count,
+      expectedCash: Math.round(expectedCash * 100) / 100
+    };
+  },
+
+  async addCashMovement(shiftId, { direction, amount, reason, createdBy }) {
+    await query(
+      `INSERT INTO cash_movements (shift_id, direction, amount, reason, created_by)
+       VALUES ($1,$2,$3,$4,$5)`,
+      [shiftId, direction, amount, reason, createdBy || 'staff']
+    );
+  },
+
+  async listCashMovements(shiftId) {
+    const { rows } = await query(
+      'SELECT * FROM cash_movements WHERE shift_id = $1 ORDER BY created_at', [shiftId]
+    );
+    return rows.map(r => ({
+      id: Number(r.id), direction: r.direction, amount: Number(r.amount),
+      reason: r.reason, createdBy: r.created_by,
+      createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : r.created_at
+    }));
+  },
+
+  async closeShift(shiftId, { closedBy, countedCash, expectedCash, notes }) {
+    const variance = Math.round((countedCash - expectedCash) * 100) / 100;
+    await query(
+      `UPDATE shifts SET closed_at = now(), closed_by = $2, counted_cash = $3,
+              expected_cash = $4, variance = $5, notes = $6
+        WHERE id = $1`,
+      [shiftId, closedBy, countedCash, expectedCash, variance, notes || '']
+    );
+    return variance;
+  },
+
+  async listShifts(limit = 30) {
+    const { rows } = await query(
+      'SELECT * FROM shifts ORDER BY opened_at DESC LIMIT $1', [limit]
+    );
+    return rows.map(shiftRow);
+  },
+
+  // -----------------------------------------------------------
+  // Void
+  // -----------------------------------------------------------
+  async voidOrder(id, { reason, voidedBy }) {
+    const { rowCount } = await query(
+      `UPDATE orders SET voided_at = now(), voided_by = $2, void_reason = $3,
+              status = 'cancelled'
+        WHERE id = $1 AND voided_at IS NULL`,
+      [id, voidedBy || 'staff', reason]
+    );
+    return rowCount > 0;
   },
 
   // -----------------------------------------------------------

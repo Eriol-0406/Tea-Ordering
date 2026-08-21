@@ -436,109 +436,20 @@ app.post('/api/orders', async (req, res, next) => {
     });
   }
 
-  // Calculate order items and total price securely.
-  //
-  // Prices and modifier charges always come from the database, never from the
-  // request. The client sends only which item, variant and option ids it wants.
-  const menu = await getMenu();
-  let total = 0;
-  const enrichedItems = [];
-
-  for (const cartItem of items) {
-    const original = menu.find(m => m.id === cartItem.id);
-    if (!original) {
-      return res.status(400).json({ error: `Invalid item reference: ID ${cartItem.id}` });
+  // Price the basket. Any rejection is a 400/409 with the reason.
+  let priced;
+  try {
+    priced = await priceOrderItems(items);
+  } catch (err) {
+    if (err instanceof PriceError) {
+      return res.status(err.status).json(
+        Object.assign({ error: err.message }, err.soldOutItemId ? { soldOutItemId: err.soldOutItemId } : {})
+      );
     }
-
-    // Checked here as well as in the UI: a stale page could still submit an
-    // item that sold out while the customer was choosing.
-    if (!original.available) {
-      return res.status(409).json({
-        error: `Sorry, ${original.name} just sold out. Please remove it and try again.`,
-        soldOutItemId: original.id
-      });
-    }
-
-    // Accepts a variant id; falls back to an index for older clients.
-    let variant = null;
-    if (cartItem.variantId != null) {
-      variant = original.variants.find(v => v.id === Number(cartItem.variantId));
-    } else if (typeof cartItem.variantIndex === 'number') {
-      variant = original.variants[cartItem.variantIndex];
-    }
-    if (!variant) {
-      return res.status(400).json({ error: `Invalid size or type selected for ${original.name}` });
-    }
-
-    // Quantity is the one number that scales the bill, so it is validated hard.
-    const quantity = Number(cartItem.quantity);
-    if (!Number.isInteger(quantity) || quantity < 1 || quantity > 20) {
-      return res.status(400).json({ error: `Invalid quantity for ${original.name} (1-20 per item)` });
-    }
-
-    // Resolve the chosen options against the groups this drink actually offers,
-    // so a request cannot smuggle in an option from another drink.
-    const requested = Array.isArray(cartItem.optionIds)
-      ? cartItem.optionIds.map(Number).filter(Number.isInteger)
-      : [];
-
-    const allowed = new Map();
-    for (const group of original.modifierGroups) {
-      for (const option of group.options) allowed.set(option.id, { group, option });
-    }
-
-    const chosen = [];
-    const perGroup = new Map();
-    for (const optionId of requested) {
-      const hit = allowed.get(optionId);
-      if (!hit) {
-        return res.status(400).json({ error: `That option is not available for ${original.name}` });
-      }
-      const count = (perGroup.get(hit.group.id) || 0) + 1;
-      perGroup.set(hit.group.id, count);
-      if (hit.group.selection === 'single' && count > 1) {
-        return res.status(400).json({ error: `Only one ${hit.group.name} may be chosen for ${original.name}` });
-      }
-      chosen.push(hit);
-    }
-
-    // Required groups fall back to their default rather than rejecting the
-    // order, so an older client that omits them still produces a valid ticket.
-    for (const group of original.modifierGroups) {
-      if (!group.required || perGroup.get(group.id)) continue;
-      const fallback = group.options.find(o => o.isDefault) || group.options[0];
-      if (fallback) chosen.push({ group, option: fallback });
-    }
-
-    const addonCharge = chosen.reduce((sum, c) => sum + c.option.priceDelta, 0);
-    const finalPricePerUnit = Math.round((variant.price + addonCharge) * 100) / 100;
-    total += finalPricePerUnit * quantity;
-
-    enrichedItems.push({
-      id: original.id,
-      name: original.name,
-      variantId: variant.id,
-      variantName: variant.name,
-      basePrice: variant.price,
-      price: finalPricePerUnit,
-      quantity,
-      category: original.category,
-      company: original.company,
-      modifiers: chosen
-        .sort((a, b) => a.group.sortOrder - b.group.sortOrder)
-        .map(c => ({
-          groupId: c.group.id,
-          groupName: c.group.name,
-          optionId: c.option.id,
-          optionName: c.option.name,
-          priceDelta: c.option.priceDelta
-        })),
-      modifiersText: chosen
-        .sort((a, b) => a.group.sortOrder - b.group.sortOrder)
-        .map(c => modifierLabel(c.group.name, c.option.name, c.option.priceDelta))
-        .join(' | ')
-    });
+    throw err;
   }
+  const enrichedItems = priced.items;
+  let total = priced.total;
 
   // Geolocation / Distance validation
   let distance = null;
@@ -752,8 +663,322 @@ app.post('/api/admin/menu/:id/availability', requireAdmin, async (req, res, next
 });
 
 // ---------------------------------------------------------------
+// Counter till, shifts and the cash drawer
+// ---------------------------------------------------------------
+const PAYMENT_METHODS = ['cash', 'duitnow', 'tng'];
+const ORDER_TYPES = ['dine_in', 'takeaway', 'delivery'];
+
+// ---- shifts ----
+app.get('/api/admin/shift', requireAdmin, async (req, res, next) => {
+  try {
+    const shift = await store.currentShift();
+    if (!shift) return res.json({ shift: null });
+    const [totals, movements] = await Promise.all([
+      store.shiftTotals(shift.id),
+      store.listCashMovements(shift.id)
+    ]);
+    res.json({ shift, totals, movements });
+  } catch (err) { next(err); }
+});
+
+app.post('/api/admin/shift/open', requireAdmin, async (req, res, next) => {
+  try {
+    const existing = await store.currentShift();
+    if (existing) {
+      return res.status(409).json({ error: 'A drawer is already open. Close it first.' });
+    }
+    const openedBy = cleanText(req.body?.openedBy, 60) || 'staff';
+    const openingFloat = readPrice(req.body?.openingFloat ?? 0);
+    if (openingFloat === null) return res.status(400).json({ error: 'Invalid opening float' });
+
+    const id = await store.openShift({ openedBy, openingFloat });
+    res.status(201).json({ success: true, shiftId: id });
+  } catch (err) { next(err); }
+});
+
+app.post('/api/admin/shift/cash', requireAdmin, async (req, res, next) => {
+  try {
+    const shift = await store.currentShift();
+    if (!shift) return res.status(409).json({ error: 'No drawer is open' });
+
+    const direction = req.body?.direction === 'out' ? 'out' : 'in';
+    const amount = readPrice(req.body?.amount);
+    const reason = cleanText(req.body?.reason, 120);
+    if (amount === null || amount <= 0) return res.status(400).json({ error: 'Enter an amount' });
+    if (!reason) return res.status(400).json({ error: 'A reason is required' });
+
+    await store.addCashMovement(shift.id, {
+      direction, amount, reason, createdBy: cleanText(req.body?.by, 60) || shift.openedBy
+    });
+    res.json({ success: true, totals: await store.shiftTotals(shift.id) });
+  } catch (err) { next(err); }
+});
+
+app.post('/api/admin/shift/close', requireAdmin, async (req, res, next) => {
+  try {
+    const shift = await store.currentShift();
+    if (!shift) return res.status(409).json({ error: 'No drawer is open' });
+
+    const countedCash = readPrice(req.body?.countedCash);
+    if (countedCash === null) return res.status(400).json({ error: 'Enter the counted cash' });
+
+    const totals = await store.shiftTotals(shift.id);
+    const variance = await store.closeShift(shift.id, {
+      closedBy: cleanText(req.body?.closedBy, 60) || shift.openedBy,
+      countedCash,
+      expectedCash: totals.expectedCash,
+      notes: cleanText(req.body?.notes, 300)
+    });
+
+    res.json({
+      success: true,
+      expectedCash: totals.expectedCash,
+      countedCash,
+      variance,
+      totals
+    });
+  } catch (err) { next(err); }
+});
+
+app.get('/api/admin/shifts', requireAdmin, async (req, res, next) => {
+  try {
+    res.json(await store.listShifts(30));
+  } catch (err) { next(err); }
+});
+
+// ---- ringing up a sale at the counter ----
+//
+// Deliberately separate from /api/orders: geofencing, IP rate limits and
+// session checks all exist to police strangers ordering remotely, and none of
+// them make sense for a member of staff standing at the till.
+app.post('/api/admin/till/orders', requireAdmin, async (req, res, next) => {
+  try {
+    const { items, paymentMethod } = req.body || {};
+
+    if (!Array.isArray(items) || !items.length) {
+      return res.status(400).json({ error: 'The bill is empty' });
+    }
+    if (!PAYMENT_METHODS.includes(paymentMethod)) {
+      return res.status(400).json({ error: 'Choose how the customer paid' });
+    }
+
+    const orderType = ORDER_TYPES.includes(req.body?.orderType) ? req.body.orderType : 'takeaway';
+    const shift = await store.currentShift();
+    if (!shift) {
+      return res.status(409).json({ error: 'Open the drawer before taking counter orders' });
+    }
+
+    let priced;
+    try {
+      priced = await priceOrderItems(items);
+    } catch (err) {
+      if (err instanceof PriceError) return res.status(err.status).json({ error: err.message });
+      throw err;
+    }
+
+    // Discount is applied to the bill, recorded separately, and never allowed
+    // to exceed the bill or turn it negative.
+    const gross = priced.total;
+    let discount = 0;
+    const discountType = req.body?.discountType;
+    if (discountType === 'percent') {
+      const percent = Number(req.body?.discountValue);
+      if (!Number.isFinite(percent) || percent < 0 || percent > 100) {
+        return res.status(400).json({ error: 'Discount must be between 0 and 100%' });
+      }
+      discount = Math.round(gross * percent) / 100;
+    } else if (discountType === 'amount') {
+      const value = readPrice(req.body?.discountValue);
+      if (value === null) return res.status(400).json({ error: 'Invalid discount amount' });
+      discount = value;
+    }
+    if (discount > gross) discount = gross;
+    discount = Math.round(discount * 100) / 100;
+
+    const total = Math.round((gross - discount) * 100) / 100;
+
+    // Cash needs a tendered amount so the drawer reconciles and staff get the
+    // change worked out for them.
+    let cashReceived = null;
+    let cashChange = null;
+    if (paymentMethod === 'cash') {
+      cashReceived = readPrice(req.body?.cashReceived);
+      if (cashReceived === null || cashReceived < total) {
+        return res.status(400).json({ error: 'Cash received is less than the amount due' });
+      }
+      cashChange = Math.round((cashReceived - total) * 100) / 100;
+    }
+
+    const now = new Date().toISOString();
+    const order = {
+      id: 'ORD-' + crypto.randomInt(100000, 1000000),
+      customerName: cleanText(req.body?.customerName, 80) || 'Counter',
+      phone: cleanText(req.body?.phone, 25) || '-',
+      notes: cleanText(req.body?.notes, 300),
+      items: priced.items,
+      grossTotal: gross,
+      discountAmount: discount,
+      discountReason: cleanText(req.body?.discountReason, 120) || null,
+      total,
+      paymentMethod,
+      // Counter sales are settled at the moment they are rung up.
+      paymentStatus: 'paid',
+      paidAt: now,
+      status: 'pending',
+      latitude: null, longitude: null, distance: null, zoneName: 'Counter',
+      spamRisk: 'Safe', riskReason: 'Rung up at the counter',
+      ipAddress: req.ip, sessionId: 'till-' + shift.id,
+      source: 'till',
+      orderType,
+      shiftId: shift.id,
+      staffName: cleanText(req.body?.staffName, 60) || shift.openedBy,
+      cashReceived, cashChange,
+      createdAt: now
+    };
+
+    await store.saveOrder(order);
+    res.status(201).json({ success: true, order });
+  } catch (err) { next(err); }
+});
+
+// ---- void ----
+app.post('/api/admin/orders/:id/void', requireAdmin, async (req, res, next) => {
+  try {
+    const reason = cleanText(req.body?.reason, 200);
+    if (!reason) return res.status(400).json({ error: 'A void needs a reason' });
+
+    const existing = await store.getOrder(req.params.id);
+    if (!existing) return res.status(404).json({ error: 'Order not found' });
+    if (existing.voidedAt) return res.status(409).json({ error: 'That order is already voided' });
+
+    const ok = await store.voidOrder(req.params.id, {
+      reason, voidedBy: cleanText(req.body?.by, 60) || 'staff'
+    });
+    if (!ok) return res.status(409).json({ error: 'That order could not be voided' });
+
+    res.json({ success: true, order: await store.getOrder(req.params.id) });
+  } catch (err) { next(err); }
+});
+
+// ---------------------------------------------------------------
 // Menu administration
 // ---------------------------------------------------------------
+// -------------------------------------------------------------
+// Order pricing
+//
+// Shared by the customer app and the counter till: both must price a drink
+// identically, and neither is allowed to send a price. An id is all the client
+// supplies; everything else is looked up.
+// -------------------------------------------------------------
+class PriceError extends Error {
+  constructor(message, status, extra) {
+    super(message);
+    this.status = status || 400;
+    Object.assign(this, extra || {});
+  }
+}
+
+async function priceOrderItems(items) {
+  const menu = await getMenu();
+  let total = 0;
+  const enrichedItems = [];
+
+  for (const cartItem of items) {
+    const original = menu.find(m => m.id === cartItem.id);
+    if (!original) {
+      throw new PriceError(`Invalid item reference: ID ${cartItem.id}`);
+    }
+
+    // Checked here as well as in the UI: a stale page could still submit an
+    // item that sold out while the customer was choosing.
+    if (!original.available) {
+      throw new PriceError(
+        `Sorry, ${original.name} just sold out. Please remove it and try again.`,
+        409, { soldOutItemId: original.id }
+      );
+    }
+
+    // Accepts a variant id; falls back to an index for older clients.
+    let variant = null;
+    if (cartItem.variantId != null) {
+      variant = original.variants.find(v => v.id === Number(cartItem.variantId));
+    } else if (typeof cartItem.variantIndex === 'number') {
+      variant = original.variants[cartItem.variantIndex];
+    }
+    if (!variant) {
+      throw new PriceError(`Invalid size or type selected for ${original.name}`);
+    }
+
+    // Quantity is the one number that scales the bill, so it is validated hard.
+    const quantity = Number(cartItem.quantity);
+    if (!Number.isInteger(quantity) || quantity < 1 || quantity > 20) {
+      throw new PriceError(`Invalid quantity for ${original.name} (1-20 per item)`);
+    }
+
+    // Resolve the chosen options against the groups this drink actually offers,
+    // so a request cannot smuggle in an option from another drink.
+    const requested = Array.isArray(cartItem.optionIds)
+      ? cartItem.optionIds.map(Number).filter(Number.isInteger)
+      : [];
+
+    const allowed = new Map();
+    for (const group of original.modifierGroups) {
+      for (const option of group.options) allowed.set(option.id, { group, option });
+    }
+
+    const chosen = [];
+    const perGroup = new Map();
+    for (const optionId of requested) {
+      const hit = allowed.get(optionId);
+      if (!hit) throw new PriceError(`That option is not available for ${original.name}`);
+      const count = (perGroup.get(hit.group.id) || 0) + 1;
+      perGroup.set(hit.group.id, count);
+      if (hit.group.selection === 'single' && count > 1) {
+        throw new PriceError(`Only one ${hit.group.name} may be chosen for ${original.name}`);
+      }
+      chosen.push(hit);
+    }
+
+    // Required groups fall back to their default rather than rejecting the
+    // order, so an older client that omits them still produces a valid ticket.
+    for (const group of original.modifierGroups) {
+      if (!group.required || perGroup.get(group.id)) continue;
+      const fallback = group.options.find(o => o.isDefault) || group.options[0];
+      if (fallback) chosen.push({ group, option: fallback });
+    }
+
+    const addonCharge = chosen.reduce((sum, c) => sum + c.option.priceDelta, 0);
+    const finalPricePerUnit = Math.round((variant.price + addonCharge) * 100) / 100;
+    total += finalPricePerUnit * quantity;
+
+    const ordered = chosen.sort((a, b) => a.group.sortOrder - b.group.sortOrder);
+
+    enrichedItems.push({
+      id: original.id,
+      name: original.name,
+      variantId: variant.id,
+      variantName: variant.name,
+      basePrice: variant.price,
+      price: finalPricePerUnit,
+      quantity,
+      category: original.category,
+      company: original.company,
+      modifiers: ordered.map(c => ({
+        groupId: c.group.id,
+        groupName: c.group.name,
+        optionId: c.option.id,
+        optionName: c.option.name,
+        priceDelta: c.option.priceDelta
+      })),
+      modifiersText: ordered
+        .map(c => modifierLabel(c.group.name, c.option.name, c.option.priceDelta))
+        .join(' | ')
+    });
+  }
+
+  return { items: enrichedItems, total: Math.round(total * 100) / 100 };
+}
+
 const PRICE_MAX = 999.99;
 
 // Seasonal window. Blank clears the date rather than leaving it unchanged, so a

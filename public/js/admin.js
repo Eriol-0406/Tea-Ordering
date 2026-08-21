@@ -580,6 +580,8 @@ function showView(name) {
   });
 
   if (name === 'menu' || name === 'modifiers') loadMenuAdmin();
+  if (name === 'till') loadTill();
+  if (name === 'drawer') loadDrawer();
   if (name === 'history' && !historyState.loaded) loadHistory(0);
   // Leaflet mis-measures while its panel is hidden, so re-measure on return.
   if (name === 'dashboard' && mapInstance) {
@@ -1176,4 +1178,403 @@ async function downloadHistoryCsv() {
   } catch (err) {
     alert(`Could not export: ${err.message}`);
   }
+}
+
+// -------------------------------------------------------------
+// Counter till
+//
+// Staff tap a drink, choose its modifiers, and the bill builds up on the right.
+// Prices shown here are only for the cashier's benefit: the server re-prices
+// everything from ids when the sale is submitted.
+// -------------------------------------------------------------
+let tillMenu = [];
+let tillCategory = 'All';
+let tillBill = [];
+let tillOrderType = 'takeaway';
+let tillDiscount = { type: 'none', value: 0, reason: '' };
+
+async function loadTill() {
+  try {
+    const res = await fetch('/api/menu');
+    tillMenu = await res.json();
+    renderTillCategories();
+    renderTillGrid();
+    renderBill();
+  } catch (err) {
+    document.getElementById('tillGrid').innerHTML =
+      `<div style="color:var(--danger); padding:2rem;">Could not load the menu.</div>`;
+  }
+}
+
+function renderTillCategories() {
+  const cats = ['All', ...new Set(tillMenu.map(i => i.category))];
+  document.getElementById('tillCategories').innerHTML = cats.map(c =>
+    `<button class="type-pill ${c === tillCategory ? 'active' : ''}" onclick="setTillCategory('${esc(c)}')">${esc(c)}</button>`
+  ).join('');
+}
+
+function setTillCategory(c) {
+  tillCategory = c;
+  renderTillCategories();
+  renderTillGrid();
+}
+
+function setOrderType(type) {
+  tillOrderType = type;
+  document.querySelectorAll('#tillOrderType .type-pill').forEach(b =>
+    b.classList.toggle('active', b.dataset.type === type));
+}
+
+function renderTillGrid() {
+  const items = tillMenu.filter(i =>
+    (tillCategory === 'All' || i.category === tillCategory) && i.available !== false);
+
+  document.getElementById('tillGrid').innerHTML = items.map(i => `
+    <button class="till-item" onclick="pickTillItem(${i.id})">
+      <span class="till-item-name">${esc(i.name)}</span>
+      <span class="till-item-price">RM ${i.variants[0].price.toFixed(2)}${i.variants.length > 1 ? '+' : ''}</span>
+    </button>
+  `).join('') || `<div class="till-empty">Nothing available in this category.</div>`;
+}
+
+// Opens the same kind of modifier choice the customer sees, in the dialog.
+function pickTillItem(itemId) {
+  const item = tillMenu.find(i => i.id === itemId);
+  if (!item) return;
+
+  const variantPills = item.variants.map((v, idx) =>
+    `<button class="type-pill ${idx === 0 ? 'active' : ''}" data-variant="${v.id}"
+             onclick="tillPickVariant(this)">${esc(v.name)} · RM${v.price.toFixed(2)}</button>`
+  ).join('');
+
+  const groups = (item.modifierGroups || []).map(g => `
+    <div class="till-group">
+      <span class="modifier-label">${esc(g.name)}${g.nameZh ? ' ' + esc(g.nameZh) : ''}</span>
+      <div class="till-options">
+        ${g.options.map(o => {
+          const active = g.selection === 'single' && (o.isDefault || (g.required && g.options[0].id === o.id));
+          return `<button class="type-pill ${active ? 'active' : ''}"
+                   data-group="${g.id}" data-selection="${g.selection}" data-option="${o.id}"
+                   onclick="tillToggleOption(this)">${esc(o.name)}${o.priceDelta ? ' +' + o.priceDelta.toFixed(2) : ''}</button>`;
+        }).join('')}
+      </div>
+    </div>
+  `).join('');
+
+  openAdminDialog(item.name, `
+    <div class="till-group"><span class="modifier-label">Size</span>
+      <div class="till-options" id="tillVariants">${variantPills}</div></div>
+    ${groups}
+    <label class="dialog-field" style="margin-top:0.6rem;">
+      <span>Quantity</span>
+      <input class="input-field" id="tillQty" type="number" min="1" max="20" value="1">
+    </label>
+  `, async () => {
+    const variantEl = document.querySelector('#tillVariants .type-pill.active');
+    const variantId = Number(variantEl.dataset.variant);
+    const variant = item.variants.find(v => v.id === variantId);
+
+    const chosen = [...document.querySelectorAll('[data-option].active')].map(el => ({
+      id: Number(el.dataset.option),
+      groupId: Number(el.dataset.group)
+    }));
+
+    const options = chosen.map(c => {
+      const group = item.modifierGroups.find(g => g.id === c.groupId);
+      const option = group.options.find(o => o.id === c.id);
+      return { group, option };
+    });
+
+    const unitPrice = variant.price + options.reduce((s, o) => s + o.option.priceDelta, 0);
+    const qty = Math.max(1, Math.min(20, parseInt(document.getElementById('tillQty').value, 10) || 1));
+
+    tillBill.push({
+      itemId: item.id,
+      name: item.name,
+      variantId,
+      variantName: variant.name,
+      optionIds: options.map(o => o.option.id),
+      optionsText: options.map(o => modifierLabel(o.group.name, o.option.name, o.option.priceDelta)).join(' | '),
+      unitPrice: Math.round(unitPrice * 100) / 100,
+      quantity: qty
+    });
+    renderBill();
+  });
+}
+
+function tillPickVariant(el) {
+  el.parentElement.querySelectorAll('.type-pill').forEach(b => b.classList.remove('active'));
+  el.classList.add('active');
+}
+
+function tillToggleOption(el) {
+  if (el.dataset.selection === 'single') {
+    el.parentElement.querySelectorAll(`[data-group="${el.dataset.group}"]`)
+      .forEach(b => b.classList.remove('active'));
+    el.classList.add('active');
+  } else {
+    el.classList.toggle('active');
+  }
+}
+
+function modifierLabel(groupName, optionName, priceDelta) {
+  if (priceDelta) return `${optionName} (+RM${priceDelta.toFixed(2)})`;
+  return `${groupName}: ${optionName}`;
+}
+
+function billGross() {
+  return Math.round(tillBill.reduce((s, l) => s + l.unitPrice * l.quantity, 0) * 100) / 100;
+}
+
+function billDiscount() {
+  const gross = billGross();
+  let d = 0;
+  if (tillDiscount.type === 'percent') d = Math.round(gross * tillDiscount.value) / 100;
+  if (tillDiscount.type === 'amount') d = tillDiscount.value;
+  return Math.round(Math.min(d, gross) * 100) / 100;
+}
+
+function renderBill() {
+  const box = document.getElementById('tillLines');
+  if (!tillBill.length) {
+    box.innerHTML = `<div class="till-empty">Tap a drink to start a bill.</div>`;
+  } else {
+    box.innerHTML = tillBill.map((l, i) => `
+      <div class="till-line">
+        <div class="till-line-main">
+          <span class="till-line-name">${esc(l.name)}</span>
+          <span class="till-line-opts">${esc(l.variantName)}${l.optionsText ? ' | ' + esc(l.optionsText) : ''}</span>
+        </div>
+        <div class="till-line-qty">
+          <button class="qty-btn" onclick="changeBillQty(${i}, -1)">-</button>
+          <span class="qty-val">${l.quantity}</span>
+          <button class="qty-btn" onclick="changeBillQty(${i}, 1)">+</button>
+        </div>
+        <span class="till-line-price">RM ${(l.unitPrice * l.quantity).toFixed(2)}</span>
+      </div>
+    `).join('');
+  }
+
+  const gross = billGross();
+  const discount = billDiscount();
+  document.getElementById('tillSummary').innerHTML = `
+    <div class="till-total-row"><span>Subtotal</span><span>RM ${gross.toFixed(2)}</span></div>
+    ${discount ? `<div class="till-total-row discount"><span>Discount${tillDiscount.reason ? ' · ' + esc(tillDiscount.reason) : ''}</span><span>- RM ${discount.toFixed(2)}</span></div>` : ''}
+    <div class="till-total-row grand"><span>Total</span><span>RM ${(gross - discount).toFixed(2)}</span></div>
+  `;
+
+  document.getElementById('tillPay').innerHTML = `
+    <button class="btn btn-secondary" style="width:100%; margin-bottom:0.5rem;" onclick="openDiscountDialog()">
+      ${discount ? 'Change discount' : 'Add discount'}
+    </button>
+    <div class="pay-buttons">
+      <button class="btn btn-primary" onclick="openPayDialog('cash')" ${tillBill.length ? '' : 'disabled'}>💵 Cash</button>
+      <button class="btn btn-primary" onclick="openPayDialog('duitnow')" ${tillBill.length ? '' : 'disabled'}>📱 DuitNow</button>
+      <button class="btn btn-primary" onclick="openPayDialog('tng')" ${tillBill.length ? '' : 'disabled'}>🔵 TnG</button>
+    </div>
+  `;
+}
+
+function changeBillQty(index, delta) {
+  const line = tillBill[index];
+  if (!line) return;
+  line.quantity += delta;
+  if (line.quantity <= 0) tillBill.splice(index, 1);
+  renderBill();
+}
+
+function clearBill() {
+  tillBill = [];
+  tillDiscount = { type: 'none', value: 0, reason: '' };
+  renderBill();
+}
+
+function openDiscountDialog() {
+  openAdminDialog('Discount', `
+    <label class="dialog-field"><span>Type</span>
+      <select class="input-field" id="dscType">
+        <option value="none">No discount</option>
+        <option value="percent" ${tillDiscount.type === 'percent' ? 'selected' : ''}>Percentage</option>
+        <option value="amount" ${tillDiscount.type === 'amount' ? 'selected' : ''}>Fixed amount (RM)</option>
+      </select>
+    </label>
+    ${field('Value', 'dscValue', tillDiscount.value || '', 'number')}
+    ${field('Reason', 'dscReason', tillDiscount.reason || '')}
+    <p class="dialog-hint">Discounts are recorded separately from the price, so your sales
+       figures still show what the drinks were worth.</p>
+  `, async () => {
+    const type = document.getElementById('dscType').value;
+    const value = Number(document.getElementById('dscValue').value) || 0;
+    const reason = document.getElementById('dscReason').value.trim();
+    if (type !== 'none' && value <= 0) throw new Error('Enter a discount value');
+    if (type === 'percent' && value > 100) throw new Error('A percentage cannot exceed 100');
+    if (type !== 'none' && !reason) throw new Error('A discount needs a reason');
+    tillDiscount = { type, value, reason };
+    renderBill();
+  });
+}
+
+function openPayDialog(method) {
+  const due = Math.round((billGross() - billDiscount()) * 100) / 100;
+  const label = { cash: 'Cash', duitnow: 'DuitNow QR', tng: 'TnG eWallet' }[method];
+
+  openAdminDialog(`${label} · RM ${due.toFixed(2)}`, `
+    <div class="pay-due">Amount due <strong>RM ${due.toFixed(2)}</strong></div>
+    ${method === 'cash' ? `
+      ${field('Cash received (RM)', 'payCash', due.toFixed(2), 'number')}
+      <div class="quick-cash">
+        ${[due, 10, 20, 50, 100].filter((v, i, a) => v >= due && a.indexOf(v) === i)
+          .map(v => `<button class="type-pill" onclick="document.getElementById('payCash').value='${v.toFixed(2)}'; showChange(${due})">RM ${v.toFixed(2)}</button>`).join('')}
+      </div>
+      <div class="pay-change" id="payChange"></div>
+    ` : `<p class="dialog-hint">Confirm once the transfer shows in your app.</p>`}
+    ${field('Customer name (optional)', 'payName', '')}
+  `, async () => {
+    const payload = {
+      items: tillBill.map(l => ({
+        id: l.itemId, variantId: l.variantId,
+        optionIds: l.optionIds, quantity: l.quantity
+      })),
+      paymentMethod: method,
+      orderType: tillOrderType,
+      customerName: document.getElementById('payName').value.trim() || 'Counter'
+    };
+    if (tillDiscount.type !== 'none') {
+      payload.discountType = tillDiscount.type;
+      payload.discountValue = tillDiscount.value;
+      payload.discountReason = tillDiscount.reason;
+    }
+    if (method === 'cash') {
+      payload.cashReceived = Number(document.getElementById('payCash').value);
+      if (!(payload.cashReceived >= due)) throw new Error('Cash received is less than the amount due');
+    }
+
+    const data = await adminJson('/api/admin/till/orders', 'POST', payload);
+    clearBill();
+    if (method === 'cash' && data.order.cashChange > 0) {
+      alert(`Change due: RM ${data.order.cashChange.toFixed(2)}`);
+    }
+  });
+
+  if (method === 'cash') {
+    document.getElementById('payCash').addEventListener('input', () => showChange(due));
+    showChange(due);
+  }
+}
+
+function showChange(due) {
+  const received = Number(document.getElementById('payCash').value) || 0;
+  const box = document.getElementById('payChange');
+  if (!box) return;
+  const change = Math.round((received - due) * 100) / 100;
+  box.innerHTML = received < due
+    ? `<span style="color:var(--danger);">Short by RM ${(due - received).toFixed(2)}</span>`
+    : `Change <strong>RM ${change.toFixed(2)}</strong>`;
+}
+
+// -------------------------------------------------------------
+// Cash drawer
+// -------------------------------------------------------------
+async function loadDrawer() {
+  const box = document.getElementById('drawerBody');
+  try {
+    const res = await adminFetch('/api/admin/shift');
+    const data = await readJsonOrExplain(res);
+
+    if (!data.shift) {
+      box.innerHTML = `
+        <div class="drawer-closed">
+          <p>No drawer is open. Counter sales are blocked until one is.</p>
+          ${field('Who is on the till', 'openBy', '')}
+          ${field('Opening float (RM)', 'openFloat', '150', 'number')}
+          <button class="btn btn-primary" style="width:100%; margin-top:0.6rem;" onclick="openDrawer()">Open drawer</button>
+        </div>`;
+      return;
+    }
+
+    const t = data.totals;
+    const row = (label, value, cls) =>
+      `<div class="till-total-row ${cls || ''}"><span>${label}</span><span>RM ${value.toFixed(2)}</span></div>`;
+
+    box.innerHTML = `
+      <div class="drawer-head">
+        Opened by <strong>${esc(data.shift.openedBy)}</strong>
+        at ${new Date(data.shift.openedAt).toLocaleString()}
+      </div>
+      ${row('Opening float', t.openingFloat)}
+      ${row('Cash sales', t.cashSales)}
+      ${row('Paid in', t.paidIn)}
+      ${row('Paid out', -t.paidOut)}
+      ${row('Expected in drawer', t.expectedCash, 'grand')}
+      <div class="drawer-side">
+        ${row('Card / e-wallet sales', t.nonCashSales)}
+        ${row('Discounts given', t.discounts)}
+        ${row(`Voided (${t.voidedCount})`, t.voidedValue)}
+        <div class="till-total-row"><span>Bills</span><span>${t.billCount}</span></div>
+      </div>
+
+      <div class="drawer-actions">
+        <button class="btn btn-secondary" onclick="openCashDialog('in')">Paid in</button>
+        <button class="btn btn-secondary" onclick="openCashDialog('out')">Paid out</button>
+        <button class="btn btn-danger" onclick="openCloseDialog(${t.expectedCash})">Close drawer</button>
+      </div>
+
+      ${data.movements.length ? `
+        <div class="drawer-movements">
+          <strong>Cash movements</strong>
+          ${data.movements.map(m => `
+            <div class="till-total-row">
+              <span>${m.direction === 'in' ? '↑' : '↓'} ${esc(m.reason)}</span>
+              <span>${m.direction === 'in' ? '+' : '-'} RM ${m.amount.toFixed(2)}</span>
+            </div>`).join('')}
+        </div>` : ''}
+    `;
+  } catch (err) {
+    box.innerHTML = `<div style="color:var(--danger); padding:2rem;">${esc(err.message)}</div>`;
+  }
+}
+
+async function openDrawer() {
+  try {
+    await adminJson('/api/admin/shift/open', 'POST', {
+      openedBy: document.getElementById('openBy').value.trim() || 'staff',
+      openingFloat: Number(document.getElementById('openFloat').value) || 0
+    });
+    loadDrawer();
+  } catch (err) { alert(err.message); }
+}
+
+function openCashDialog(direction) {
+  openAdminDialog(direction === 'in' ? 'Paid in' : 'Paid out', `
+    ${field('Amount (RM)', 'cashAmt', '', 'number')}
+    ${field('Reason', 'cashReason', '')}
+  `, async () => {
+    const amount = Number(document.getElementById('cashAmt').value);
+    const reason = document.getElementById('cashReason').value.trim();
+    if (!(amount > 0)) throw new Error('Enter an amount');
+    if (!reason) throw new Error('A reason is required');
+    await adminJson('/api/admin/shift/cash', 'POST', { direction, amount, reason });
+    loadDrawer();
+  });
+}
+
+function openCloseDialog(expected) {
+  openAdminDialog('Close drawer', `
+    <div class="pay-due">Expected in drawer <strong>RM ${expected.toFixed(2)}</strong></div>
+    ${field('Counted cash (RM)', 'closeCount', '', 'number')}
+    ${field('Notes (optional)', 'closeNotes', '')}
+    <p class="dialog-hint">Count the drawer before entering the figure. Any difference is
+       recorded as a variance rather than quietly adjusted.</p>
+  `, async () => {
+    const counted = Number(document.getElementById('closeCount').value);
+    if (!Number.isFinite(counted)) throw new Error('Enter the counted cash');
+    const data = await adminJson('/api/admin/shift/close', 'POST', {
+      countedCash: counted,
+      notes: document.getElementById('closeNotes').value.trim()
+    });
+    const v = data.variance;
+    alert(v === 0 ? 'Drawer balanced exactly.'
+      : `Variance: RM ${v.toFixed(2)} (${v < 0 ? 'short' : 'over'})`);
+    loadDrawer();
+  });
 }

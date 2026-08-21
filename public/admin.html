@@ -44,6 +44,12 @@
       <a href="#" class="admin-nav-item active" data-view="dashboard" onclick="showView('dashboard'); return false;">
         <span>📊</span> Dashboard
       </a>
+      <a href="#" class="admin-nav-item" data-view="till" onclick="showView('till'); return false;">
+        <span>🧾</span> Till
+      </a>
+      <a href="#" class="admin-nav-item" data-view="drawer" onclick="showView('drawer'); return false;">
+        <span>💵</span> Drawer
+      </a>
       <a href="#" class="admin-nav-item" data-view="menu" onclick="showView('menu'); return false;">
         <span>🍵</span> Menu
       </a>
@@ -153,6 +159,49 @@
     </div>
 
     </div><!-- /view-dashboard -->
+
+    <!-- ========== TILL VIEW ========== -->
+    <div class="admin-view" id="view-till" style="display:none;">
+      <div class="till-layout">
+        <section class="admin-orders-list-panel till-products">
+          <div class="panel-title-row">
+            <h3 style="font-size:1.1rem;">Ring Up</h3>
+            <div class="till-type-picker" id="tillOrderType">
+              <button class="type-pill active" data-type="takeaway" onclick="setOrderType('takeaway')">Takeaway</button>
+              <button class="type-pill" data-type="dine_in" onclick="setOrderType('dine_in')">Dine in</button>
+              <button class="type-pill" data-type="delivery" onclick="setOrderType('delivery')">Delivery</button>
+            </div>
+          </div>
+          <div class="till-categories" id="tillCategories"></div>
+          <div class="till-grid" id="tillGrid"></div>
+        </section>
+
+        <section class="admin-orders-list-panel till-bill">
+          <div class="panel-title-row">
+            <h3 style="font-size:1.1rem;">Current Bill</h3>
+            <button class="btn btn-secondary stock-btn" onclick="clearBill()">Clear</button>
+          </div>
+          <div class="till-lines" id="tillLines">
+            <div class="till-empty">Tap a drink to start a bill.</div>
+          </div>
+          <div class="till-summary" id="tillSummary"></div>
+          <div class="till-pay" id="tillPay"></div>
+        </section>
+      </div>
+    </div>
+
+    <!-- ========== DRAWER VIEW ========== -->
+    <div class="admin-view" id="view-drawer" style="display:none;">
+      <section class="admin-orders-list-panel" style="max-width:760px;">
+        <div class="panel-title-row">
+          <h3 style="font-size:1.1rem;">Cash Drawer</h3>
+          <button class="btn btn-secondary" onclick="loadDrawer()" style="padding:0.5rem 1rem; font-size:0.85rem;">🔄 Refresh</button>
+        </div>
+        <div id="drawerBody">
+          <div style="text-align:center; color:var(--text-secondary); padding:3rem;">Loading...</div>
+        </div>
+      </section>
+    </div>
 
     <!-- ========== MENU VIEW ========== -->
     <div class="admin-view" id="view-menu" style="display:none;">
